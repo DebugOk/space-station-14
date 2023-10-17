@@ -1327,7 +1327,14 @@ namespace Content.Client.Preferences.UI
                 // immediately lock requirements if they arent met.
                 // another function checks Disabled after creating the selector so this has to be done now
                 var requirements = IoCManager.Resolve<JobRequirementsManager>();
-                if (proto.Requirements != null && !requirements.CheckRoleTime(proto.Requirements, out var reason))
+
+                if (requirements.CheckRoleBan($"Antag:{proto.ID}", out var reason))
+                {
+                    LockRequirements(reason);
+                    return; // We don't really care about the other requirements if we're banned
+                }
+
+                if (proto.Requirements != null && !requirements.CheckRoleTime(proto.Requirements, out reason))
                 {
                     LockRequirements(reason);
                 }

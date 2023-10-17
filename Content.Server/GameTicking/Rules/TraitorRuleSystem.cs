@@ -1,4 +1,5 @@
 using System.Linq;
+using Content.Server.Administration.Managers;
 using Content.Server.Chat.Managers;
 using Content.Server.GameTicking.Rules.Components;
 using Content.Server.Mind;
@@ -41,6 +42,7 @@ public sealed class TraitorRuleSystem : GameRuleSystem<TraitorRuleComponent>
     [Dependency] private readonly SharedRoleSystem _roleSystem = default!;
     [Dependency] private readonly SharedJobSystem _jobs = default!;
     [Dependency] private readonly ObjectivesSystem _objectives = default!;
+    [Dependency] private readonly IBanManager _banManager = default!;
 
     private int PlayersPerTraitor => _cfg.GetCVar(CCVars.TraitorPlayersPerTraitor);
     private int MaxTraitors => _cfg.GetCVar(CCVars.TraitorMaxTraitors);
@@ -163,6 +165,10 @@ public sealed class TraitorRuleSystem : GameRuleSystem<TraitorRuleComponent>
             {
                 continue;
             }
+
+            // Check if the player is banned from being an antag.
+            if (_banManager.CheckRoleBan(player.UserId, $"Antag:{component.TraitorPrototypeId}"))
+                continue;
 
             // Latejoin
             if (player.AttachedEntity != null && pendingQuery.HasComponent(player.AttachedEntity.Value))

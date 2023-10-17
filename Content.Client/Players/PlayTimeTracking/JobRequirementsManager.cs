@@ -122,4 +122,18 @@ public sealed class JobRequirementsManager
         reason = reasons.Count == 0 ? null : FormattedMessage.FromMarkup(string.Join('\n', reasons));
         return reason == null;
     }
+
+    public bool CheckRoleBan(string job, [NotNullWhen(true)] out FormattedMessage? reason)
+    {
+        reason = null;
+
+        // We expect whatever is calling this function to use the proper prefix. We could check, but it doesnt really matter.
+        if (_roleBans.Contains(job))
+        {
+            reason = FormattedMessage.FromUnformatted(Loc.GetString("role-ban"));
+            return true;
+        }
+
+        return false;
+    }
 }

@@ -25,6 +25,7 @@ public interface IBanManager
     public void CreateServerBan(NetUserId? target, string? targetUsername, NetUserId? banningAdmin, (IPAddress, int)? addressRange, ImmutableArray<byte>? hwid, uint? minutes, NoteSeverity severity, string reason);
     public HashSet<string>? GetRoleBans(NetUserId playerUserId);
     public HashSet<string>? GetJobBans(NetUserId playerUserId);
+    public bool CheckRoleBan(NetUserId playerUserId, string role);
 
     /// <summary>
     /// Creates a job ban for the specified target, username or GUID

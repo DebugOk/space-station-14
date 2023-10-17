@@ -36,6 +36,7 @@ public sealed class BanManager : IBanManager, IPostInjectInit
 
     public const string SawmillId = "admin.bans";
     public const string JobPrefix = "Job:";
+    public const string AntagPrefix = "Antag:";
 
     private readonly Dictionary<NetUserId, HashSet<ServerRoleBanDef>> _cachedRoleBans = new();
 
@@ -73,6 +74,16 @@ public sealed class BanManager : IBanManager, IPostInjectInit
     public HashSet<string>? GetRoleBans(NetUserId playerUserId)
     {
         return _cachedRoleBans.TryGetValue(playerUserId, out var roleBans) ? roleBans.Select(banDef => banDef.Role).ToHashSet() : null;
+    }
+
+    public bool CheckRoleBan(NetUserId playerUserId, string role)
+    {
+        if (_cachedRoleBans.TryGetValue(playerUserId, out var roleBans))
+        {
+            return roleBans.Any(ban => ban.Role == role && ban.UserId == playerUserId); // Why do I have to double check this-
+        }
+
+        return false;
     }
 
     private async Task CacheDbRoleBans(NetUserId userId, IPAddress? address = null, ImmutableArray<byte>? hwId = null)
@@ -183,12 +194,17 @@ public sealed class BanManager : IBanManager, IPostInjectInit
     // Removing it will clutter the note list. Please also make sure that department bans are applied to roles with the same DateTimeOffset.
     public async void CreateRoleBan(NetUserId? target, string? targetUsername, NetUserId? banningAdmin, (IPAddress, int)? addressRange, ImmutableArray<byte>? hwid, string role, uint? minutes, NoteSeverity severity, string reason, DateTimeOffset timeOfBan)
     {
-        if (!_prototypeManager.TryIndex(role, out JobPrototype? _))
+        var isJob = _prototypeManager.TryIndex(role, out JobPrototype? _);
+        var isAntag = _prototypeManager.TryIndex(role, out AntagPrototype? _);
+
+        if (!isJob && !isAntag)
         {
             throw new ArgumentException($"Invalid role '{role}'", nameof(role));
         }
 
-        role = string.Concat(JobPrefix, role);
+        var prefix = isJob ? JobPrefix : AntagPrefix;
+        role = string.Concat(prefix, role);
+
         DateTimeOffset? expires = null;
         if (minutes > 0)
         {
