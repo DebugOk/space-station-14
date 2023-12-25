@@ -134,6 +134,12 @@ public sealed class EntityPainter
                 .Resize(imgX, imgY)
                 .Flip(FlipMode.Vertical));
 
+            if (entity.Sprite.GetLayerDirectionCount(layer) == 1)
+            {
+                image.Mutate(o => o
+                    .Rotate(Convert.ToSingle(worldRotation.Degrees)));
+            }
+
             var pointX = (int) entity.X - imgX / 2 + EyeManager.PixelsPerMeter / 2;
             var pointY = (int) entity.Y - imgY / 2 + EyeManager.PixelsPerMeter / 2;
             canvas.Mutate(o => o.DrawImage(image, new Point(pointX, pointY), 1));
