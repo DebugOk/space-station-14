@@ -1,90 +1,141 @@
-namespace Content.Server.Botany.Components
+using Content.Shared.Chemistry.Components;
+using Robust.Shared.Serialization.TypeSerializers.Implementations.Custom;
+using Robust.Shared.Audio;
+
+namespace Content.Server.Botany.Components;
+
+[RegisterComponent]
+public sealed partial class PlantHolderComponent : Component
 {
-    [RegisterComponent]
-    public sealed partial class PlantHolderComponent : Component
-    {
-        [ViewVariables]
-        public TimeSpan NextUpdate = TimeSpan.Zero;
-        public TimeSpan UpdateDelay = TimeSpan.FromSeconds(3);
+    /// <summary>
+    /// Game time for the next plant reagent update.
+    /// </summary>
+    [DataField(customTypeSerializer: typeof(TimeOffsetSerializer))]
+    public TimeSpan NextUpdate = TimeSpan.Zero;
 
-        [ViewVariables]
-        public int LastProduce;
+    /// <summary>
+    /// Time between plant reagent consumption updates.
+    /// </summary>
+    [DataField]
+    public TimeSpan UpdateDelay = TimeSpan.FromSeconds(3);
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public int MissingGas;
+    [DataField]
+    public int LastProduce;
 
-        public readonly TimeSpan CycleDelay = TimeSpan.FromSeconds(15f);
+    [DataField]
+    public int MissingGas;
 
-        [ViewVariables]
-        public TimeSpan LastCycle = TimeSpan.Zero;
+    /// <summary>
+    /// Time between plant growth updates.
+    /// </summary>
+    [DataField]
+    public TimeSpan CycleDelay = TimeSpan.FromSeconds(15f);
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public bool UpdateSpriteAfterUpdate;
+    /// <summary>
+    /// Game time when the plant last did a growth update.
+    /// </summary>
+    [DataField(customTypeSerializer: typeof(TimeOffsetSerializer))]
+    public TimeSpan LastCycle = TimeSpan.Zero;
 
-        [ViewVariables(VVAccess.ReadWrite)] [DataField("drawWarnings")]
-        public bool DrawWarnings = false;
+    /// <summary>
+    /// Sound played when any reagent is transferred into the plant holder.
+    /// </summary>
+    [DataField]
+    public SoundSpecifier? WateringSound;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public float WaterLevel = 100f;
+    [DataField]
+    public bool UpdateSpriteAfterUpdate;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public float NutritionLevel = 100f;
+    /// <summary>
+    /// Set to true if the plant holder displays plant warnings (e.g. water low) in the sprite and
+    /// examine text. Used to differentiate hydroponic trays from simple soil plots.
+    /// </summary>
+    [DataField]
+    public bool DrawWarnings = false;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public float PestLevel { get; set; }
+    [DataField]
+    public float WaterLevel = 100f;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public float WeedLevel { get; set; }
+    [DataField]
+    public float NutritionLevel = 100f;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public float Toxins { get; set; }
+    [DataField]
+    public float PestLevel;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public int Age { get; set; }
+    [DataField]
+    public float WeedLevel;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public int SkipAging { get; set; }
+    [DataField]
+    public float Toxins;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public bool Dead { get; set; }
+    [DataField]
+    public int Age;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public bool Harvest { get; set; }
+    [DataField]
+    public int SkipAging;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public bool Sampled { get; set; }
+    [DataField]
+    public bool Dead;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public int YieldMod { get; set; } = 1;
+    [DataField]
+    public bool Harvest;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public float MutationMod { get; set; } = 1f;
+    /// <summary>
+    /// Set to true if this plant has been clipped by seed clippers. Used to prevent a single plant
+    /// from repeatedly being clipped.
+    /// </summary>
+    [DataField]
+    public bool Sampled;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public float MutationLevel { get; set; }
+    /// <summary>
+    /// Multiplier for the number of entities produced at harvest.
+    /// </summary>
+    [DataField]
+    public int YieldMod = 1;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public float Health { get; set; }
+    [DataField]
+    public float MutationMod = 1f;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public float WeedCoefficient { get; set; } = 1f;
+    [DataField]
+    public float MutationLevel;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public SeedData? Seed { get; set; }
+    [DataField]
+    public float Health;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public bool ImproperHeat { get; set; }
+    [DataField]
+    public float WeedCoefficient = 1f;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public bool ImproperPressure { get; set; }
+    [DataField]
+    public SeedData? Seed;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public bool ImproperLight { get; set; }
+    /// <summary>
+    /// True if the plant is losing health due to too high/low temperature.
+    /// </summary>
+    [DataField]
+    public bool ImproperHeat;
 
-        [ViewVariables(VVAccess.ReadWrite)]
-        public bool ForceUpdate { get; set; }
+    /// <summary>
+    /// True if the plant is losing health due to too high/low pressure.
+    /// </summary>
+    [DataField]
+    public bool ImproperPressure;
 
-        [DataField("solution")]
-        public string SoilSolutionName { get; set; } = "soil";
-    }
+    /// <summary>
+    /// Not currently used.
+    /// </summary>
+    [DataField]
+    public bool ImproperLight;
+
+    /// <summary>
+    /// Set to true to force a plant update (visuals, component, etc.) regardless of the current
+    /// update cycle time. Typically used when some interaction affects this plant.
+    /// </summary>
+    [DataField]
+    public bool ForceUpdate;
+
+    [DataField]
+    public string SoilSolutionName = "soil";
+
+    [ViewVariables]
+    public Entity<SolutionComponent>? SoilSolution = null;
 }

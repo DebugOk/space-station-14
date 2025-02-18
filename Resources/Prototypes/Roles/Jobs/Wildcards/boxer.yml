@@ -9,17 +9,18 @@
   access:
   - Service
   - Maintenance
+  special:
+  - !type:GiveItemOnHolidaySpecial
+    holiday: BoxingDay
+    prototype: ClothingHandsGlovesBoxingRigged
 
 - type: startingGear
   id: BoxerGear
   equipment:
-    jumpsuit: UniformShortsRed
-    back: ClothingBackpackFilled
     id: BoxerPDA
     ears: ClothingHeadsetService
-    gloves: ClothingHandsGlovesBoxingRed
     shoes: ClothingShoesColorRed
     belt: ClothingBeltChampion
-  innerclothingskirt: UniformShortsRedWithTop
-  satchel: ClothingBackpackSatchelFilled
-  duffelbag: ClothingBackpackDuffelFilled
+  #storage:
+    #back:
+    #- Stuff

@@ -4,20 +4,19 @@ using Content.Server.EUI;
 using Content.Shared.Administration;
 using Content.Shared.Bql;
 using Content.Shared.Eui;
-using Robust.Server.Player;
 using Robust.Shared.Toolshed;
 using Robust.Shared.Toolshed.Errors;
 
 namespace Content.Server.Toolshed.Commands;
 
-[ToolshedCommand, AdminCommand(AdminFlags.Admin)]
+[ToolshedCommand, AdminCommand(AdminFlags.VarEdit)]
 public sealed class VisualizeCommand : ToolshedCommand
 {
     [Dependency] private readonly EuiManager _euiManager = default!;
 
     [CommandImplementation]
     public void VisualizeEntities(
-            [CommandInvocationContext] IInvocationContext ctx,
+            IInvocationContext ctx,
             [PipedArgument] IEnumerable<EntityUid> input
         )
     {
@@ -28,17 +27,17 @@ public sealed class VisualizeCommand : ToolshedCommand
         }
 
         var ui = new ToolshedVisualizeEui(
-            input.Select(e => (EntName(e), e)).ToArray()
+            input.Select(e => (EntName(e), EntityManager.GetNetEntity(e))).ToArray()
         );
-        _euiManager.OpenEui(ui, (IPlayerSession) ctx.Session);
+        _euiManager.OpenEui(ui, ctx.Session);
         _euiManager.QueueStateUpdate(ui);
     }
 }
 internal sealed class ToolshedVisualizeEui : BaseEui
 {
-    private readonly (string name, EntityUid entity)[] _entities;
+    private readonly (string name, NetEntity entity)[] _entities;
 
-    public ToolshedVisualizeEui((string name, EntityUid entity)[] entities)
+    public ToolshedVisualizeEui((string name, NetEntity entity)[] entities)
     {
         _entities = entities;
     }

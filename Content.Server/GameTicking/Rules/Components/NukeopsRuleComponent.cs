@@ -1,127 +1,105 @@
-using Content.Server.NPC.Components;
-using Content.Server.StationEvents.Events;
+using Content.Server.RoundEnd;
 using Content.Shared.Dataset;
-using Content.Shared.Humanoid.Prototypes;
+using Content.Shared.NPC.Prototypes;
 using Content.Shared.Roles;
-using Robust.Server.Player;
 using Robust.Shared.Audio;
-using Robust.Shared.Map;
 using Robust.Shared.Prototypes;
-using Robust.Shared.Serialization.TypeSerializers.Implementations;
-using Robust.Shared.Serialization.TypeSerializers.Implementations.Custom.Prototype;
-using Robust.Shared.Serialization.TypeSerializers.Implementations.Custom.Prototype.Set;
-using Robust.Shared.Utility;
+using Robust.Shared.Serialization.TypeSerializers.Implementations.Custom;
 
 namespace Content.Server.GameTicking.Rules.Components;
 
-[RegisterComponent, Access(typeof(NukeopsRuleSystem), typeof(LoneOpsSpawnRule))]
+[RegisterComponent, Access(typeof(NukeopsRuleSystem))]
 public sealed partial class NukeopsRuleComponent : Component
 {
     /// <summary>
-    /// The minimum needed amount of players
+    /// What will happen if all of the nuclear operatives will die. Used by LoneOpsSpawn event.
     /// </summary>
-    [DataField("minPlayers")]
-    public int MinPlayers = 20;
+    [DataField]
+    public RoundEndBehavior RoundEndBehavior = RoundEndBehavior.ShuttleCall;
 
     /// <summary>
-    ///     This INCLUDES the operatives. So a value of 3 is satisfied by 2 players & 1 operative
+    /// Text for shuttle call if RoundEndBehavior is ShuttleCall.
     /// </summary>
-    [DataField("playersPerOperative")]
-    public int PlayersPerOperative = 10;
-
-    [DataField("maxOps")]
-    public int MaxOperatives = 5;
+    [DataField]
+    public string RoundEndTextSender = "comms-console-announcement-title-centcom";
 
     /// <summary>
-    /// Whether or not all of the nuclear operatives dying will end the round. Used by LoneOpsSpawn event.
+    /// Text for shuttle call if RoundEndBehavior is ShuttleCall.
     /// </summary>
-    [DataField("endsRound")]
-    public bool EndsRound = true;
+    [DataField]
+    public string RoundEndTextShuttleCall = "nuke-ops-no-more-threat-announcement-shuttle-call";
 
     /// <summary>
-    /// Whether or not to spawn the nuclear operative outpost. Used by LoneOpsSpawn event.
+    /// Text for announcement if RoundEndBehavior is ShuttleCall. Used if shuttle is already called
     /// </summary>
-    [DataField("spawnOutpost")]
-    public bool SpawnOutpost = true;
+    [DataField]
+    public string RoundEndTextAnnouncement = "nuke-ops-no-more-threat-announcement";
 
-    [DataField("spawnPointProto", customTypeSerializer: typeof(PrototypeIdSerializer<EntityPrototype>))]
-    public string SpawnPointPrototype = "SpawnPointNukies";
+    /// <summary>
+    /// Time to emergency shuttle to arrive if RoundEndBehavior is ShuttleCall.
+    /// </summary>
+    [DataField]
+    public TimeSpan EvacShuttleTime = TimeSpan.FromMinutes(3);
 
-    [DataField("ghostSpawnPointProto", customTypeSerializer: typeof(PrototypeIdSerializer<EntityPrototype>))]
-    public string GhostSpawnPointProto = "SpawnPointGhostNukeOperative";
+    /// <summary>
+    /// Whether or not nukie left their outpost
+    /// </summary>
+    [DataField]
+    public bool LeftOutpost;
 
-    [DataField("commanderRoleProto", customTypeSerializer: typeof(PrototypeIdSerializer<AntagPrototype>))]
-    public string CommanderRolePrototype = "NukeopsCommander";
+    /// <summary>
+    ///     Enables opportunity to get extra TC for war declaration
+    /// </summary>
+    [DataField]
+    public bool CanEnableWarOps = true;
 
-    [DataField("operativeRoleProto", customTypeSerializer: typeof(PrototypeIdSerializer<AntagPrototype>))]
-    public string OperativeRoleProto = "Nukeops";
+    /// <summary>
+    ///     Indicates time when war has been declared, null if not declared
+    /// </summary>
+    [DataField(customTypeSerializer: typeof(TimeOffsetSerializer))]
+    public TimeSpan? WarDeclaredTime;
 
-    [DataField("medicRoleProto", customTypeSerializer: typeof(PrototypeIdSerializer<AntagPrototype>))]
-    public string MedicRoleProto = "NukeopsMedic";
+    /// <summary>
+    ///     This amount of TC will be given to each nukie
+    /// </summary>
+    [DataField]
+    public int WarTcAmountPerNukie = 40;
 
-    [DataField("commanderStartingGearProto", customTypeSerializer: typeof(PrototypeIdSerializer<StartingGearPrototype>))]
-    public string CommanderStartGearPrototype = "SyndicateCommanderGearFull";
+    /// <summary>
+    ///     Delay between war declaration and nuke ops arrival on station map. Gives crew time to prepare
+    /// </summary>
+    [DataField]
+    public TimeSpan WarNukieArriveDelay = TimeSpan.FromMinutes(15);
 
-    [DataField("medicStartGearProto", customTypeSerializer: typeof(PrototypeIdSerializer<StartingGearPrototype>))]
-    public string MedicStartGearPrototype = "SyndicateOperativeMedicFull";
+    /// <summary>
+    ///     Time crew can't call emergency shuttle after war declaration.
+    /// </summary>
+    [DataField]
+    public TimeSpan WarEvacShuttleDisabled = TimeSpan.FromMinutes(25);
 
-    [DataField("operativeStartGearProto", customTypeSerializer: typeof(PrototypeIdSerializer<StartingGearPrototype>))]
-    public string OperativeStartGearPrototype = "SyndicateOperativeGearFull";
+    /// <summary>
+    ///     Minimal operatives count for war declaration
+    /// </summary>
+    [DataField]
+    public int WarDeclarationMinOps = 4;
 
-    [DataField("eliteNames", customTypeSerializer: typeof(PrototypeIdSerializer<DatasetPrototype>))]
-    public string EliteNames = "SyndicateNamesElite";
-
-    [DataField("normalNames", customTypeSerializer: typeof(PrototypeIdSerializer<DatasetPrototype>))]
-    public string NormalNames = "SyndicateNamesNormal";
-
-    [DataField("outpostMap", customTypeSerializer: typeof(ResPathSerializer))]
-    public ResPath NukieOutpostMap = new("/Maps/nukieplanet.yml");
-
-    [DataField("shuttleMap", customTypeSerializer: typeof(ResPathSerializer))]
-    public ResPath NukieShuttleMap = new("/Maps/infiltrator.yml");
-
-    [DataField("winType")]
+    [DataField]
     public WinType WinType = WinType.Neutral;
 
-    [DataField("winConditions")]
+    [DataField]
     public List<WinCondition> WinConditions = new ();
 
-    public MapId? NukiePlanet;
-
-    // TODO: use components, don't just cache entity UIDs
-    // There have been (and probably still are) bugs where these refer to deleted entities from old rounds.
-    public EntityUid? NukieOutpost;
-    public EntityUid? NukieShuttle;
+    [DataField]
     public EntityUid? TargetStation;
 
-    /// <summary>
-    ///     Cached starting gear prototypes.
-    /// </summary>
-    [DataField("startingGearPrototypes")]
-    public Dictionary<string, StartingGearPrototype> StartingGearPrototypes = new ();
+    [DataField]
+    public ProtoId<NpcFactionPrototype> Faction = "Syndicate";
 
     /// <summary>
-    ///     Cached operator name prototypes.
+    ///     Path to antagonist alert sound.
     /// </summary>
-    [DataField("operativeNames")]
-    public Dictionary<string, List<string>> OperativeNames = new();
-
-    /// <summary>
-    ///     Data to be used in <see cref="OnMindAdded"/> for an operative once the Mind has been added.
-    /// </summary>
-    [DataField("operativeMindPendingData")]
-    public Dictionary<EntityUid, string> OperativeMindPendingData = new();
-
-    /// <summary>
-    ///     Players who played as an operative at some point in the round.
-    ///     Stores the session as well as the entity name
-    /// </summary>
-    /// todo: don't store sessions, dingus
-    [DataField("operativePlayers")]
-    public Dictionary<string, IPlayerSession> OperativePlayers = new();
-
-    [DataField("faction", customTypeSerializer: typeof(PrototypeIdSerializer<NpcFactionPrototype>), required: true)]
-    public string Faction = default!;
+    [DataField]
+    public SoundSpecifier GreetSoundNotification = new SoundPathSpecifier("/Audio/Ambience/Antag/nukeops_start.ogg");
 }
 
 public enum WinType : byte

@@ -1,7 +1,9 @@
+#nullable enable
 using System.Linq;
-using Content.Server.Mind;
-using Content.Server.Players;
+using Content.Server.GameTicking;
 using Content.Shared.Ghost;
+using Content.Shared.Mind;
+using Content.Shared.Players;
 using Robust.Server.Console;
 using Robust.Server.GameObjects;
 using Robust.Server.Player;
@@ -27,21 +29,23 @@ public sealed partial class MindTests
         var entMan = server.ResolveDependency<IServerEntityManager>();
         var playerMan = server.ResolveDependency<IPlayerManager>();
 
-        var mindSystem = entMan.EntitySysManager.GetEntitySystem<MindSystem>();
+        var mindSystem = entMan.EntitySysManager.GetEntitySystem<SharedMindSystem>();
 
         EntityUid playerEnt = default;
         EntityUid visitEnt = default;
-        Mind mind = default!;
+        EntityUid mindId = default!;
+        MindComponent mind = default!;
         await server.WaitAssertion(() =>
         {
-            var player = playerMan.ServerSessions.Single();
+            var player = playerMan.Sessions.Single();
 
             playerEnt = entMan.SpawnEntity(null, MapCoordinates.Nullspace);
             visitEnt = entMan.SpawnEntity(null, MapCoordinates.Nullspace);
 
-            mind = mindSystem.CreateMind(player.UserId);
-            mindSystem.TransferTo(mind, playerEnt);
-            mindSystem.Visit(mind, visitEnt);
+            mindId = mindSystem.CreateMind(player.UserId);
+            mind = entMan.GetComponent<MindComponent>(mindId);
+            mindSystem.TransferTo(mindId, playerEnt);
+            mindSystem.Visit(mindId, visitEnt);
 
             Assert.Multiple(() =>
             {
@@ -74,35 +78,43 @@ public sealed partial class MindTests
         await using var pair = await SetupPair(dirty: true);
         var server = pair.Server;
         var testMap = await pair.CreateTestMap();
-        var coordinates = testMap.GridCoords;
+        var testMap2 = await pair.CreateTestMap();
 
         var entMan = server.ResolveDependency<IServerEntityManager>();
         var mapManager = server.ResolveDependency<IMapManager>();
         var playerMan = server.ResolveDependency<IPlayerManager>();
-        var player = playerMan.ServerSessions.Single();
+        var player = playerMan.Sessions.Single();
 
-        var mindSystem = entMan.EntitySysManager.GetEntitySystem<MindSystem>();
+        var mindSystem = entMan.EntitySysManager.GetEntitySystem<SharedMindSystem>();
 
         EntityUid playerEnt = default;
-        Mind mind = default!;
+        EntityUid mindId = default!;
+        MindComponent mind = default!;
         await server.WaitAssertion(() =>
         {
-            playerEnt = entMan.SpawnEntity(null, coordinates);
-            mind = player.ContentData()!.Mind!;
-            mindSystem.TransferTo(mind, playerEnt);
+            playerEnt = entMan.SpawnEntity(null, testMap.GridCoords);
+            mindId = player.ContentData()!.Mind!.Value;
+            mind = entMan.GetComponent<MindComponent>(mindId);
+            mindSystem.TransferTo(mindId, playerEnt);
 
             Assert.That(mind.CurrentEntity, Is.EqualTo(playerEnt));
         });
 
         await pair.RunTicksSync(5);
-        await server.WaitPost(() => mapManager.DeleteMap(testMap.MapId));
+        await server.WaitAssertion(() => mapManager.DeleteMap(testMap.MapId));
         await pair.RunTicksSync(5);
 
         await server.WaitAssertion(() =>
         {
 #pragma warning disable NUnit2045 // Interdependent assertions.
-            Assert.That(entMan.EntityExists(mind.CurrentEntity), Is.True);
-            Assert.That(mind.CurrentEntity, Is.Not.EqualTo(playerEnt));
+            // Spawn ghost on the second map
+            var attachedEntity = player.AttachedEntity;
+            Assert.That(entMan.EntityExists(attachedEntity), Is.True);
+            Assert.That(attachedEntity, Is.Not.EqualTo(playerEnt));
+            Assert.That(entMan.HasComponent<GhostComponent>(attachedEntity));
+            var transform = entMan.GetComponent<TransformComponent>(attachedEntity.Value);
+            Assert.That(transform.MapID, Is.Not.EqualTo(MapId.Nullspace));
+            Assert.That(transform.MapID, Is.Not.EqualTo(testMap.MapId));
 #pragma warning restore NUnit2045
         });
 
@@ -124,7 +136,7 @@ public sealed partial class MindTests
         var entMan = server.ResolveDependency<IServerEntityManager>();
         var playerMan = server.ResolveDependency<IPlayerManager>();
 
-        var player = playerMan.ServerSessions.Single();
+        var player = playerMan.Sessions.Single();
 
         Assert.That(!entMan.HasComponent<GhostComponent>(player.AttachedEntity), "Player was initially a ghost?");
 
@@ -155,10 +167,10 @@ public sealed partial class MindTests
 
         var entMan = server.ResolveDependency<IServerEntityManager>();
         var playerMan = server.ResolveDependency<IPlayerManager>();
-        var mindSystem = entMan.EntitySysManager.GetEntitySystem<MindSystem>();
+        var mindSystem = entMan.EntitySysManager.GetEntitySystem<SharedMindSystem>();
         var mind = GetMind(pair);
 
-        var player = playerMan.ServerSessions.Single();
+        var player = playerMan.Sessions.Single();
 #pragma warning disable NUnit2045 // Interdependent assertions.
         Assert.That(player.AttachedEntity, Is.Not.Null);
         Assert.That(entMan.EntityExists(player.AttachedEntity));
@@ -168,16 +180,16 @@ public sealed partial class MindTests
         EntityUid ghost = default!;
         await server.WaitAssertion(() =>
         {
-            ghost = entMan.SpawnEntity("MobObserver", MapCoordinates.Nullspace);
-            mindSystem.Visit(mind, ghost);
+            ghost = entMan.SpawnEntity(GameTicker.ObserverPrototypeName, MapCoordinates.Nullspace);
+            mindSystem.Visit(mind.Id, ghost);
         });
 
         Assert.Multiple(() =>
         {
             Assert.That(player.AttachedEntity, Is.EqualTo(ghost));
             Assert.That(entMan.HasComponent<GhostComponent>(player.AttachedEntity), "player is not a ghost");
-            Assert.That(mind.VisitingEntity, Is.EqualTo(player.AttachedEntity));
-            Assert.That(mind.OwnedEntity, Is.EqualTo(originalEntity));
+            Assert.That(mind.Comp.VisitingEntity, Is.EqualTo(player.AttachedEntity));
+            Assert.That(mind.Comp.OwnedEntity, Is.EqualTo(originalEntity));
         });
 
         await pair.RunTicksSync(5);
@@ -192,8 +204,8 @@ public sealed partial class MindTests
         {
             Assert.That(player.AttachedEntity, Is.EqualTo(ghost));
             Assert.That(entMan.HasComponent<GhostComponent>(player.AttachedEntity));
-            Assert.That(mind.VisitingEntity, Is.Null);
-            Assert.That(mind.OwnedEntity, Is.EqualTo(ghost));
+            Assert.That(mind.Comp.VisitingEntity, Is.Null);
+            Assert.That(mind.Comp.OwnedEntity, Is.EqualTo(ghost));
         });
 
         await pair.CleanReturnAsync();
@@ -214,12 +226,12 @@ public sealed partial class MindTests
         var playerMan = server.ResolveDependency<IPlayerManager>();
         var serverConsole = server.ResolveDependency<IServerConsoleHost>();
 
-        var player = playerMan.ServerSessions.Single();
+        var player = playerMan.Sessions.Single();
 
         var ghost = await BecomeGhost(pair);
 
         // Player is a normal ghost (not admin ghost).
-        Assert.That(entMan.GetComponent<MetaDataComponent>(player.AttachedEntity!.Value).EntityPrototype?.ID, Is.Not.EqualTo("AdminObserver"));
+        Assert.That(entMan.GetComponent<MetaDataComponent>(player.AttachedEntity!.Value).EntityPrototype?.ID, Is.Not.EqualTo(GameTicker.AdminObserverPrototypeName));
 
         // Try to become an admin ghost
         await server.WaitAssertion(() => serverConsole.ExecuteCommand(player, "aghost"));
@@ -230,11 +242,13 @@ public sealed partial class MindTests
         {
             Assert.That(player.AttachedEntity, Is.Not.EqualTo(ghost), "Player is still attached to the old ghost");
             Assert.That(entMan.HasComponent<GhostComponent>(player.AttachedEntity), "Player did not become a new ghost");
-            Assert.That(entMan.GetComponent<MetaDataComponent>(player.AttachedEntity!.Value).EntityPrototype?.ID, Is.EqualTo("AdminObserver"));
+            Assert.That(entMan.GetComponent<MetaDataComponent>(player.AttachedEntity!.Value).EntityPrototype?.ID, Is.EqualTo(GameTicker.AdminObserverPrototypeName));
         });
 
-        var mind = player.ContentData()?.Mind;
-        Assert.That(mind, Is.Not.Null);
+        var mindId = player.ContentData()?.Mind;
+        Assert.That(mindId, Is.Not.Null);
+
+        var mind = entMan.GetComponent<MindComponent>(mindId.Value);
         Assert.That(mind.VisitingEntity, Is.Null);
 
         await pair.CleanReturnAsync();
@@ -257,7 +271,7 @@ public sealed partial class MindTests
         var playerMan = server.ResolveDependency<IPlayerManager>();
         var serverConsole = server.ResolveDependency<IServerConsoleHost>();
 
-        var player = playerMan.ServerSessions.Single();
+        var player = playerMan.Sessions.Single();
 
         EntityUid ghost = default!;
 

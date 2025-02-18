@@ -2,6 +2,7 @@
 using Content.Shared.Chemistry.Reagent;
 using Robust.Server.Player;
 using Robust.Shared.Enums;
+using Robust.Shared.Player;
 using Robust.Shared.Prototypes;
 
 namespace Content.Server.Chemistry.EntitySystems;
@@ -16,8 +17,7 @@ public sealed class ChemistryGuideDataSystem : SharedChemistryGuideDataSystem
     {
         base.Initialize();
 
-        PrototypeManager.PrototypesReloaded += PrototypeManagerReload;
-
+        SubscribeLocalEvent<PrototypesReloadedEventArgs>(PrototypeManagerReload);
         _player.PlayerStatusChanged += OnPlayerStatusChanged;
 
         InitializeServerRegistry();
@@ -63,5 +63,10 @@ public sealed class ChemistryGuideDataSystem : SharedChemistryGuideDataSystem
 
         var ev = new ReagentGuideRegistryChangedEvent(changeset);
         RaiseNetworkEvent(ev);
+    }
+
+    public override void ReloadAllReagentPrototypes()
+    {
+        InitializeServerRegistry();
     }
 }

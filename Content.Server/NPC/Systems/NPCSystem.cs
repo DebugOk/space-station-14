@@ -1,10 +1,16 @@
+using System.Diagnostics.CodeAnalysis;
 using Content.Server.NPC.Components;
 using Content.Server.NPC.HTN;
 using Content.Shared.CCVar;
+using Content.Shared.Mind;
+using Content.Shared.Mind.Components;
 using Content.Shared.Mobs;
 using Content.Shared.Mobs.Systems;
+using Content.Shared.NPC;
+using Content.Shared.NPC.Systems;
 using Robust.Server.GameObjects;
 using Robust.Shared.Configuration;
+using Robust.Shared.Player;
 
 namespace Content.Server.NPC.Systems
 {
@@ -31,8 +37,8 @@ namespace Content.Server.NPC.Systems
         {
             base.Initialize();
 
-            _configurationManager.OnValueChanged(CCVars.NPCEnabled, SetEnabled, true);
-            _configurationManager.OnValueChanged(CCVars.NPCMaxUpdates, SetMaxUpdates, true);
+            Subs.CVar(_configurationManager, CCVars.NPCEnabled, value => Enabled = value, true);
+            Subs.CVar(_configurationManager, CCVars.NPCMaxUpdates, obj => _maxUpdates = obj, true);
         }
 
         public void OnPlayerNPCAttach(EntityUid uid, HTNComponent component, PlayerAttachedEvent args)
@@ -45,17 +51,11 @@ namespace Content.Server.NPC.Systems
             if (_mobState.IsIncapacitated(uid) || TerminatingOrDeleted(uid))
                 return;
 
+            // This NPC has an attached mind, so it should not wake up.
+            if (TryComp<MindContainerComponent>(uid, out var mindContainer) && mindContainer.HasMind)
+                return;
+
             WakeNPC(uid, component);
-        }
-
-        private void SetMaxUpdates(int obj) => _maxUpdates = obj;
-        private void SetEnabled(bool value) => Enabled = value;
-
-        public override void Shutdown()
-        {
-            base.Shutdown();
-            _configurationManager.UnsubValueChanged(CCVars.NPCEnabled, SetEnabled);
-            _configurationManager.UnsubValueChanged(CCVars.NPCMaxUpdates, SetMaxUpdates);
         }
 
         public void OnNPCMapInit(EntityUid uid, HTNComponent component, MapInitEvent args)
@@ -75,6 +75,20 @@ namespace Content.Server.NPC.Systems
         public bool IsAwake(EntityUid uid, HTNComponent component, ActiveNPCComponent? active = null)
         {
             return Resolve(uid, ref active, false);
+        }
+
+        public bool TryGetNpc(EntityUid uid, [NotNullWhen(true)] out NPCComponent? component)
+        {
+            // If you add your own NPC components then add them here.
+
+            if (TryComp<HTNComponent>(uid, out var htn))
+            {
+                component = htn;
+                return true;
+            }
+
+            component = null;
+            return false;
         }
 
         /// <summary>

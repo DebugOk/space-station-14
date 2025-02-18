@@ -1,9 +1,9 @@
-﻿#nullable enable
+#nullable enable
 using System.Collections.Generic;
 using Content.IntegrationTests.Pair;
 using Content.Server.Administration.Managers;
-using Robust.Server.Player;
-using Robust.Shared.Players;
+using Robust.Shared.Network;
+using Robust.Shared.Player;
 using Robust.Shared.Toolshed;
 using Robust.Shared.Toolshed.Errors;
 using Robust.Shared.Toolshed.Syntax;
@@ -36,16 +36,18 @@ public abstract class ToolshedTest : IInvocationContext
         await TearDown();
     }
 
-    protected virtual async Task TearDown()
+    protected virtual Task TearDown()
     {
-        Assert.IsEmpty(_expectedErrors);
+        Assert.That(_expectedErrors, Is.Empty);
         ClearErrors();
+
+        return Task.CompletedTask;
     }
 
     [SetUp]
     public virtual async Task Setup()
     {
-        Pair = await PoolManager.GetServerClient(new PoolSettings {Connected = Connected});
+        Pair = await PoolManager.GetServerClient(new PoolSettings { Connected = Connected });
         Server = Pair.Server;
 
         if (Connected)
@@ -60,7 +62,7 @@ public abstract class ToolshedTest : IInvocationContext
         AdminManager = Server.ResolveDependency<IAdminManager>();
     }
 
-    protected bool InvokeCommand(string command, out object? result, IPlayerSession? session = null)
+    protected bool InvokeCommand(string command, out object? result, ICommonSession? session = null)
     {
         return Toolshed.InvokeCommand(this, command, null, out result);
     }
@@ -72,15 +74,15 @@ public abstract class ToolshedTest : IInvocationContext
         return (T) res!;
     }
 
-    protected void ParseCommand(string command, Type? inputType = null, Type? expectedType = null, bool once = false)
+    protected void ParseCommand(string command, Type? inputType = null, Type? expectedType = null)
     {
         var parser = new ParserContext(command, Toolshed);
-        var success = CommandRun.TryParse(false, parser, inputType, expectedType, once, out _, out _, out var error);
+        var success = CommandRun.TryParse(parser, inputType, expectedType, out _);
 
-        if (error is not null)
-            ReportError(error);
+        if (parser.Error is not null)
+            ReportError(parser.Error);
 
-        if (error is null)
+        if (parser.Error is null)
             Assert.That(success, $"Parse failed despite no error being reported. Parsed {command}");
     }
 
@@ -95,7 +97,8 @@ public abstract class ToolshedTest : IInvocationContext
         return true;
     }
 
-    protected IPlayerSession? InvocationSession { get; set; }
+    protected ICommonSession? InvocationSession { get; set; }
+    public NetUserId? User => Session?.UserId;
 
     public ICommonSession? Session
     {
@@ -141,7 +144,7 @@ public abstract class ToolshedTest : IInvocationContext
                 );
         }
 
-        done:
+    done:
         _errors.Add(err);
     }
 
@@ -150,9 +153,26 @@ public abstract class ToolshedTest : IInvocationContext
         return _errors;
     }
 
+    public bool HasErrors => _errors.Count > 0;
+
     public void ClearErrors()
     {
         _errors.Clear();
+    }
+
+    public object? ReadVar(string name)
+    {
+        return Variables.GetValueOrDefault(name);
+    }
+
+    public void WriteVar(string name, object? value)
+    {
+        Variables[name] = value;
+    }
+
+    public IEnumerable<string> GetVars()
+    {
+        return Variables.Keys;
     }
 
     public Dictionary<string, object?> Variables { get; } = new();

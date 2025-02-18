@@ -1,16 +1,13 @@
 ﻿using Content.Server.Administration;
 using Content.Server.Chat.Systems;
-using Content.Server.GameTicking;
-using Content.Server.Mind.Components;
 using Content.Server.Popups;
 using Content.Server.Speech.Muting;
-using Content.Shared.ActionBlocker;
-using Content.Shared.Actions;
+using Content.Shared.Mobs;
 using Content.Shared.Mobs.Components;
 using Content.Shared.Mobs.Systems;
 using Robust.Server.Console;
-using Robust.Server.GameObjects;
-using System;
+using Robust.Shared.Player;
+using Content.Shared.Speech.Muting;
 
 namespace Content.Server.Mobs;
 
@@ -79,31 +76,10 @@ public sealed class CritMobActionsSystem : EntitySystem
                 }
                 lastWords += "...";
 
-                _chat.TrySendInGameICMessage(uid, lastWords, InGameICChatType.Whisper, ChatTransmitRange.Normal, ignoreActionBlocker: true);
+                _chat.TrySendInGameICMessage(uid, lastWords, InGameICChatType.Whisper, ChatTransmitRange.Normal, checkRadioPrefix: false, ignoreActionBlocker: true);
                 _host.ExecuteCommand(actor.PlayerSession, "ghost");
             });
 
         args.Handled = true;
     }
-}
-
-/// <summary>
-///     Only applies to mobs in crit capable of ghosting/succumbing
-/// </summary>
-public sealed partial class CritSuccumbEvent : InstantActionEvent
-{
-}
-
-/// <summary>
-///     Only applies/has functionality to mobs in crit that have <see cref="DeathgaspComponent"/>
-/// </summary>
-public sealed partial class CritFakeDeathEvent : InstantActionEvent
-{
-}
-
-/// <summary>
-///     Only applies to mobs capable of speaking, as a last resort in crit
-/// </summary>
-public sealed partial class CritLastWordsEvent : InstantActionEvent
-{
 }

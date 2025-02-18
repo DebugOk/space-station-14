@@ -20,9 +20,11 @@ public abstract partial class SharedCryoPodSystem: EntitySystem
 {
     [Dependency] private readonly SharedAppearanceSystem _appearanceSystem = default!;
     [Dependency] private readonly StandingStateSystem _standingStateSystem = default!;
+    [Dependency] private readonly EmagSystem _emag = default!;
     [Dependency] private readonly MobStateSystem _mobStateSystem = default!;
     [Dependency] private readonly SharedPopupSystem _popupSystem = default!;
     [Dependency] private readonly SharedContainerSystem _containerSystem = default!;
+    [Dependency] private readonly SharedPointLightSystem _light = default!;
     [Dependency] private readonly ISharedAdminLogManager _adminLogger = default!;
 
     public override void Initialize()
@@ -51,14 +53,17 @@ public abstract partial class SharedCryoPodSystem: EntitySystem
     {
         if (!Resolve(uid, ref cryoPod))
             return;
+
         var cryoPodEnabled = HasComp<ActiveCryoPodComponent>(uid);
-        if (TryComp<SharedPointLightComponent>(uid, out var light))
+
+        if (_light.TryGetLight(uid, out var light))
         {
-            light.Enabled = cryoPodEnabled && cryoPod.BodyContainer.ContainedEntity != null;
+            _light.SetEnabled(uid, cryoPodEnabled && cryoPod.BodyContainer.ContainedEntity != null, light);
         }
 
         if (!Resolve(uid, ref appearance))
             return;
+
         _appearanceSystem.SetData(uid, CryoPodComponent.CryoPodVisuals.ContainsEntity, cryoPod.BodyContainer.ContainedEntity == null, appearance);
         _appearanceSystem.SetData(uid, CryoPodComponent.CryoPodVisuals.IsOn, cryoPodEnabled, appearance);
     }
@@ -72,7 +77,7 @@ public abstract partial class SharedCryoPodSystem: EntitySystem
             return false;
 
         var xform = Transform(target);
-        cryoPodComponent.BodyContainer.Insert(target, transform: xform);
+        _containerSystem.Insert((target, xform), cryoPodComponent.BodyContainer);
 
         EnsureComp<InsideCryoPodComponent>(target);
         _standingStateSystem.Stand(target, force: true); // Force-stand the mob so that the cryo pod sprite overlays it fully
@@ -113,7 +118,7 @@ public abstract partial class SharedCryoPodSystem: EntitySystem
         if (cryoPodComponent.BodyContainer.ContainedEntity is not {Valid: true} contained)
             return null;
 
-        cryoPodComponent.BodyContainer.Remove(contained);
+        _containerSystem.Remove(contained, cryoPodComponent.BodyContainer);
         // InsideCryoPodComponent is removed automatically in its EntGotRemovedFromContainerMessage listener
         // RemComp<InsideCryoPodComponent>(contained);
 
@@ -152,9 +157,13 @@ public abstract partial class SharedCryoPodSystem: EntitySystem
     protected void OnEmagged(EntityUid uid, CryoPodComponent? cryoPodComponent, ref GotEmaggedEvent args)
     {
         if (!Resolve(uid, ref cryoPodComponent))
-        {
             return;
-        }
+
+        if (!_emag.CompareFlag(args.Type, EmagType.Interaction))
+            return;
+
+        if (cryoPodComponent.PermaLocked && cryoPodComponent.Locked)
+            return;
 
         cryoPodComponent.PermaLocked = true;
         cryoPodComponent.Locked = true;

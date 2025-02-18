@@ -1,7 +1,7 @@
 ﻿using Content.Server.Administration;
 using Content.Server.Administration.Managers;
 using Content.Shared.Administration;
-using Robust.Server.Player;
+using Robust.Shared.Player;
 using Robust.Shared.Toolshed;
 using Robust.Shared.Toolshed.Syntax;
 
@@ -22,13 +22,9 @@ public sealed class ACmdCommand : ToolshedCommand
     }
 
     [CommandImplementation("caninvoke")]
-    public bool CanInvoke(
-        [CommandInvocationContext] IInvocationContext ctx,
-        [PipedArgument] CommandSpec command,
-        [CommandArgument] ValueRef<IPlayerSession> player
-        )
+    public bool CanInvoke(IInvocationContext ctx, [PipedArgument] CommandSpec command, ICommonSession player)
     {
         // Deliberately discard the error.
-        return ((IPermissionController) _adminManager).CheckInvokable(command, player.Evaluate(ctx), out var err);
+        return ((IPermissionController) _adminManager).CheckInvokable(command, player, out _);
     }
 }

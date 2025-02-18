@@ -2,9 +2,11 @@
 using System.Linq;
 using Content.Shared.Body.Components;
 using Content.Shared.Body.Systems;
-using Robust.Server.GameObjects;
+using Robust.Shared.Containers;
+using Robust.Shared.EntitySerialization.Systems;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Utility;
 
 namespace Content.IntegrationTests.Tests.Body;
 
@@ -31,16 +33,18 @@ public sealed class SaveLoadReparentTest
         var maps = server.ResolveDependency<IMapManager>();
         var mapLoader = entities.System<MapLoaderSystem>();
         var bodySystem = entities.System<SharedBodySystem>();
+        var containerSystem = entities.System<SharedContainerSystem>();
+        var mapSys = entities.System<SharedMapSystem>();
 
         await server.WaitAssertion(() =>
         {
-            var mapId = maps.CreateMap();
+            mapSys.CreateMap(out var mapId);
             maps.CreateGrid(mapId);
             var human = entities.SpawnEntity("HumanBodyDummy", new MapCoordinates(0, 0, mapId));
 
             Assert.That(entities.HasComponent<BodyComponent>(human), Is.True);
 
-            var parts = bodySystem.GetBodyChildren(human).ToArray();
+            var parts = bodySystem.GetBodyChildren(human).Skip(1).ToArray();
             var organs = bodySystem.GetBodyOrgans(human).ToArray();
 
             Assert.Multiple(() =>
@@ -54,9 +58,17 @@ public sealed class SaveLoadReparentTest
                 Assert.Multiple(() =>
                 {
                     Assert.That(component.Body, Is.EqualTo(human));
-                    Assert.That(component.ParentSlot, Is.Not.Null);
-                    Assert.That(component.ParentSlot.Parent, Is.Not.EqualTo(default(EntityUid)));
-                    Assert.That(component.ParentSlot.Child, Is.EqualTo(id));
+                    Assert.That(component.Body, Is.Not.Null);
+                    var parent = bodySystem.GetParentPartOrNull(id);
+                    Assert.That(parent, Is.Not.EqualTo(default(EntityUid)));
+                    if (!bodySystem.IsPartRoot(component.Body.Value, id, null, component))
+                    {
+                        Assert.That(parent, Is.Not.Null);
+                    }
+                    else
+                    {
+                        Assert.That(parent, Is.Null);
+                    }
                 });
 
                 foreach (var (slotId, slot) in component.Children)
@@ -64,19 +76,22 @@ public sealed class SaveLoadReparentTest
                     Assert.Multiple(() =>
                     {
                         Assert.That(slot.Id, Is.EqualTo(slotId));
-                        Assert.That(slot.Parent, Is.Not.EqualTo(default(EntityUid)));
+                        var container =
+                            containerSystem.GetContainer(id, SharedBodySystem.GetPartSlotContainerId(slotId));
+                        Assert.That(container.ContainedEntities, Is.Not.Empty);
                     });
                 }
             }
 
             foreach (var (id, component) in organs)
             {
+                var parent = bodySystem.GetParentPartOrNull(id);
+
                 Assert.Multiple(() =>
                 {
                     Assert.That(component.Body, Is.EqualTo(human));
-                    Assert.That(component.ParentSlot, Is.Not.Null);
-                    Assert.That(component.ParentSlot.Parent, Is.Not.EqualTo(default(EntityUid)));
-                    Assert.That(component.ParentSlot.Child, Is.EqualTo(id));
+                    Assert.That(parent, Is.Not.Null);
+                    Assert.That(parent.Value, Is.Not.EqualTo(default(EntityUid)));
                 });
             }
 
@@ -97,13 +112,12 @@ public sealed class SaveLoadReparentTest
                 Is.Not.Empty
             );
 
-            const string mapPath = $"/{nameof(SaveLoadReparentTest)}{nameof(Test)}map.yml";
+            var mapPath = new ResPath($"/{nameof(SaveLoadReparentTest)}{nameof(Test)}map.yml");
 
-            mapLoader.SaveMap(mapId, mapPath);
-            maps.DeleteMap(mapId);
+            Assert.That(mapLoader.TrySaveMap(mapId, mapPath));
+            mapSys.DeleteMap(mapId);
 
-            mapId = maps.CreateMap();
-            Assert.That(mapLoader.TryLoad(mapId, mapPath, out _), Is.True);
+            Assert.That(mapLoader.TryLoadMap(mapPath, out var map, out _), Is.True);
 
             var query = EnumerateQueryEnumerator(
                     entities.EntityQueryEnumerator<BodyComponent>()
@@ -115,7 +129,7 @@ public sealed class SaveLoadReparentTest
             foreach (var (uid, body) in query)
             {
                 human = uid;
-                parts = bodySystem.GetBodyChildren(human).ToArray();
+                parts = bodySystem.GetBodyChildren(human).Skip(1).ToArray();
                 organs = bodySystem.GetBodyOrgans(human).ToArray();
 
                 Assert.Multiple(() =>
@@ -126,12 +140,13 @@ public sealed class SaveLoadReparentTest
 
                 foreach (var (id, component) in parts)
                 {
+                    var parent = bodySystem.GetParentPartOrNull(id);
+
                     Assert.Multiple(() =>
                     {
                         Assert.That(component.Body, Is.EqualTo(human));
-                        Assert.That(component.ParentSlot, Is.Not.Null);
-                        Assert.That(component.ParentSlot.Parent, Is.Not.EqualTo(default(EntityUid)));
-                        Assert.That(component.ParentSlot.Child, Is.EqualTo(id));
+                        Assert.That(parent, Is.Not.Null);
+                        Assert.That(parent.Value, Is.Not.EqualTo(default(EntityUid)));
                     });
 
                     foreach (var (slotId, slot) in component.Children)
@@ -139,23 +154,26 @@ public sealed class SaveLoadReparentTest
                         Assert.Multiple(() =>
                         {
                             Assert.That(slot.Id, Is.EqualTo(slotId));
-                            Assert.That(slot.Parent, Is.Not.EqualTo(default(EntityUid)));
+                            var container =
+                                containerSystem.GetContainer(id, SharedBodySystem.GetPartSlotContainerId(slotId));
+                            Assert.That(container.ContainedEntities, Is.Not.Empty);
                         });
                     }
                 }
 
                 foreach (var (id, component) in organs)
                 {
+                    var parent = bodySystem.GetParentPartOrNull(id);
+
                     Assert.Multiple(() =>
                     {
                         Assert.That(component.Body, Is.EqualTo(human));
-                        Assert.That(component.ParentSlot, Is.Not.Null);
-                        Assert.That(component.ParentSlot.Parent, Is.Not.EqualTo(default(EntityUid)));
-                        Assert.That(component.ParentSlot.Child, Is.EqualTo(id));
+                        Assert.That(parent, Is.Not.Null);
+                        Assert.That(parent.Value, Is.Not.EqualTo(default(EntityUid)));
                     });
                 }
 
-                maps.DeleteMap(mapId);
+                entities.DeleteEntity(map);
             }
         });
 

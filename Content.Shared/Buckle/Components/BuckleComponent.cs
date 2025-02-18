@@ -1,10 +1,16 @@
+using System.Diagnostics.CodeAnalysis;
+using Content.Shared.Alert;
 using Content.Shared.Interaction;
 using Robust.Shared.GameStates;
 using Robust.Shared.Serialization;
+using Robust.Shared.Serialization.TypeSerializers.Implementations.Custom;
 
 namespace Content.Shared.Buckle.Components;
 
-[RegisterComponent, NetworkedComponent]
+/// <summary>
+/// This component allows an entity to be buckled to an entity with a <see cref="StrapComponent"/>.
+/// </summary>
+[RegisterComponent, NetworkedComponent, AutoGenerateComponentState, AutoGenerateComponentPause]
 [Access(typeof(SharedBuckleSystem))]
 public sealed partial class BuckleComponent : Component
 {
@@ -13,91 +19,136 @@ public sealed partial class BuckleComponent : Component
     /// Separated from normal interaction range to fix the "someone buckled to a strap
     /// across a table two tiles away" problem.
     /// </summary>
-    [DataField("range")]
-    [ViewVariables(VVAccess.ReadWrite)]
-    public float Range = SharedInteractionSystem.InteractionRange / 1.4f;
+    [DataField]
+    public float Range = SharedInteractionSystem.InteractionRange;
 
     /// <summary>
     /// True if the entity is buckled, false otherwise.
     /// </summary>
-    [ViewVariables(VVAccess.ReadWrite)]
-    public bool Buckled;
-
-    [ViewVariables]
-    public EntityUid? LastEntityBuckledTo;
+    [MemberNotNullWhen(true, nameof(BuckledTo))]
+    public bool Buckled => BuckledTo != null;
 
     /// <summary>
     /// Whether or not collisions should be possible with the entity we are strapped to
     /// </summary>
-    [ViewVariables(VVAccess.ReadWrite)]
-    [DataField("dontCollide")]
+    [DataField, AutoNetworkedField]
     public bool DontCollide;
 
     /// <summary>
     /// Whether or not we should be allowed to pull the entity we are strapped to
     /// </summary>
-    [ViewVariables(VVAccess.ReadWrite)]
-    [DataField("pullStrap")]
+    [DataField]
     public bool PullStrap;
 
     /// <summary>
     /// The amount of time that must pass for this entity to
     /// be able to unbuckle after recently buckling.
     /// </summary>
-    [DataField("delay")]
-    [ViewVariables(VVAccess.ReadWrite)]
-    public TimeSpan UnbuckleDelay = TimeSpan.FromSeconds(0.25f);
+    [DataField]
+    public TimeSpan Delay = TimeSpan.FromSeconds(0.25f);
 
     /// <summary>
     /// The time that this entity buckled at.
     /// </summary>
-    [ViewVariables]
-    public TimeSpan BuckleTime;
+    [DataField(customTypeSerializer: typeof(TimeOffsetSerializer)), AutoPausedField, AutoNetworkedField]
+    public TimeSpan? BuckleTime;
 
     /// <summary>
     /// The strap that this component is buckled to.
     /// </summary>
-    [ViewVariables]
+    [DataField, AutoNetworkedField]
     public EntityUid? BuckledTo;
 
     /// <summary>
     /// The amount of space that this entity occupies in a
     /// <see cref="StrapComponent"/>.
     /// </summary>
-    [DataField("size")]
-    [ViewVariables(VVAccess.ReadWrite)]
+    [DataField]
     public int Size = 100;
 
     /// <summary>
     /// Used for client rendering
     /// </summary>
-    [ViewVariables]
-    public int? OriginalDrawDepth;
+    [ViewVariables] public int? OriginalDrawDepth;
 }
 
-[Serializable, NetSerializable]
-public sealed class BuckleComponentState : ComponentState
+public sealed partial class UnbuckleAlertEvent : BaseAlertEvent;
+
+/// <summary>
+/// Event raised directed at a strap entity before some entity gets buckled to it.
+/// </summary>
+[ByRefEvent]
+public record struct StrapAttemptEvent(
+    Entity<StrapComponent> Strap,
+    Entity<BuckleComponent> Buckle,
+    EntityUid? User,
+    bool Popup)
 {
-    public BuckleComponentState(bool buckled, EntityUid? buckledTo, EntityUid? lastEntityBuckledTo,
-        bool dontCollide)
-    {
-        Buckled = buckled;
-        BuckledTo = buckledTo;
-        LastEntityBuckledTo = lastEntityBuckledTo;
-        DontCollide = dontCollide;
-    }
-
-    public readonly bool Buckled;
-    public readonly EntityUid? BuckledTo;
-    public  readonly EntityUid? LastEntityBuckledTo;
-    public readonly bool DontCollide;
+    public bool Cancelled;
 }
 
+/// <summary>
+/// Event raised directed at a buckle entity before it gets buckled to some strap entity.
+/// </summary>
 [ByRefEvent]
-public record struct BuckleAttemptEvent(EntityUid StrapEntity, EntityUid BuckledEntity, EntityUid UserEntity, bool Buckling, bool Cancelled = false);
+public record struct BuckleAttemptEvent(
+    Entity<StrapComponent> Strap,
+    Entity<BuckleComponent> Buckle,
+    EntityUid? User,
+    bool Popup)
+{
+    public bool Cancelled;
+}
 
+/// <summary>
+/// Event raised directed at a strap entity before some entity gets unbuckled from it.
+/// </summary>
 [ByRefEvent]
-public readonly record struct BuckleChangeEvent(EntityUid StrapEntity, EntityUid BuckledEntity, bool Buckling);
+public record struct UnstrapAttemptEvent(
+    Entity<StrapComponent> Strap,
+    Entity<BuckleComponent> Buckle,
+    EntityUid? User,
+    bool Popup)
+{
+    public bool Cancelled;
+}
+
+/// <summary>
+/// Event raised directed at a buckle entity before it gets unbuckled.
+/// </summary>
+[ByRefEvent]
+public record struct UnbuckleAttemptEvent(
+    Entity<StrapComponent> Strap,
+    Entity<BuckleComponent> Buckle,
+    EntityUid? User,
+    bool Popup)
+{
+    public bool Cancelled;
+}
+
+/// <summary>
+/// Event raised directed at a strap entity after something has been buckled to it.
+/// </summary>
+[ByRefEvent]
+public readonly record struct StrappedEvent(Entity<StrapComponent> Strap, Entity<BuckleComponent> Buckle);
+
+/// <summary>
+/// Event raised directed at a buckle entity after it has been buckled.
+/// </summary>
+[ByRefEvent]
+public readonly record struct BuckledEvent(Entity<StrapComponent> Strap, Entity<BuckleComponent> Buckle);
+
+/// <summary>
+/// Event raised directed at a strap entity after something has been unbuckled from it.
+/// </summary>
+[ByRefEvent]
+public readonly record struct UnstrappedEvent(Entity<StrapComponent> Strap, Entity<BuckleComponent> Buckle);
+
+/// <summary>
+/// Event raised directed at a buckle entity after it has been unbuckled from some strap entity.
+/// </summary>
+[ByRefEvent]
+public readonly record struct UnbuckledEvent(Entity<StrapComponent> Strap, Entity<BuckleComponent> Buckle);
 
 [Serializable, NetSerializable]
 public enum BuckleVisuals

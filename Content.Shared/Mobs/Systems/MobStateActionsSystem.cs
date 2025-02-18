@@ -1,7 +1,5 @@
-﻿using Content.Shared.Actions;
-using Content.Shared.Actions.ActionTypes;
+using Content.Shared.Actions;
 using Content.Shared.Mobs.Components;
-using Robust.Shared.Prototypes;
 
 namespace Content.Shared.Mobs.Systems;
 
@@ -10,45 +8,50 @@ namespace Content.Shared.Mobs.Systems;
 /// </summary>
 public sealed class MobStateActionsSystem : EntitySystem
 {
-    [Dependency] private readonly IPrototypeManager _proto = default!;
     [Dependency] private readonly SharedActionsSystem _actions = default!;
 
     /// <inheritdoc/>
     public override void Initialize()
     {
         SubscribeLocalEvent<MobStateActionsComponent, MobStateChangedEvent>(OnMobStateChanged);
+        SubscribeLocalEvent<MobStateComponent, ComponentInit>(OnMobStateComponentInit);
     }
 
     private void OnMobStateChanged(EntityUid uid, MobStateActionsComponent component, MobStateChangedEvent args)
     {
+        ComposeActions(uid, component, args.NewMobState);
+    }
+
+    private void OnMobStateComponentInit(EntityUid uid, MobStateComponent component, ComponentInit args)
+    {
+        if (!TryComp<MobStateActionsComponent>(uid, out var mobStateActionsComp))
+            return;
+
+        ComposeActions(uid, mobStateActionsComp, component.CurrentState);
+    }
+
+    /// <summary>
+    /// Adds or removes actions from a mob based on mobstate.
+    /// </summary>
+    private void ComposeActions(EntityUid uid, MobStateActionsComponent component, MobState newMobState)
+    {
         if (!TryComp<ActionsComponent>(uid, out var action))
             return;
 
-        foreach (var (state, acts) in component.Actions)
+        foreach (var act in component.GrantedActions)
         {
-            if (state != args.NewMobState && state != args.OldMobState)
-                continue;
+            Del(act);
+        }
+        component.GrantedActions.Clear();
 
-            foreach (var item in acts)
-            {
-                if (!_proto.TryIndex<InstantActionPrototype>(item, out var proto))
-                    continue;
+        if (!component.Actions.TryGetValue(newMobState, out var toGrant))
+            return;
 
-                var instance = new InstantAction(proto);
-                if (state == args.OldMobState)
-                {
-                    // Don't remove actions that would be getting readded anyway
-                    if (component.Actions.TryGetValue(args.NewMobState, out var value)
-                        && value.Contains(item))
-                        continue;
-
-                    _actions.RemoveAction(uid, instance, action);
-                }
-                else if (state == args.NewMobState)
-                {
-                    _actions.AddAction(uid, instance, null, action);
-                }
-            }
+        foreach (var id in toGrant)
+        {
+            EntityUid? act = null;
+            if (_actions.AddAction(uid, ref act, id, uid, action))
+                component.GrantedActions.Add(act.Value);
         }
     }
 }

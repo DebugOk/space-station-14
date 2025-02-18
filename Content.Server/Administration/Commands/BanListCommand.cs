@@ -36,9 +36,9 @@ public sealed class BanListCommand : LocalizedCommands
             return;
         }
 
-        if (shell.Player is not IPlayerSession player)
+        if (shell.Player is not { } player)
         {
-            var bans = await _dbManager.GetServerBansAsync(data.LastAddress, data.UserId, data.LastHWId, false);
+            var bans = await _dbManager.GetServerBansAsync(data.LastAddress, data.UserId, data.LastLegacyHWId, data.LastModernHWIds, false);
 
             if (bans.Count == 0)
             {
@@ -67,7 +67,7 @@ public sealed class BanListCommand : LocalizedCommands
             return CompletionResult.Empty;
 
         var playerMgr = IoCManager.Resolve<IPlayerManager>();
-        var options = playerMgr.ServerSessions.Select(c => c.Name).OrderBy(c => c).ToArray();
+        var options = playerMgr.Sessions.Select(c => c.Name).OrderBy(c => c).ToArray();
         return CompletionResult.FromHintOptions(options, Loc.GetString("cmd-banlist-hint"));
     }
 }

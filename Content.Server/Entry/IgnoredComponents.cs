@@ -7,18 +7,19 @@ namespace Content.Server.Entry
             "ConstructionGhost",
             "IconSmooth",
             "InteractionOutline",
-            "ItemStatus",
             "Marker",
             "GuidebookControlsTest",
             "GuideHelp",
             "Clickable",
             "Icon",
-            "HandheldGPS",
             "CableVisualizer",
+            "SolutionItemStatus",
             "UIFragment",
             "PdaBorderColor",
             "InventorySlots",
             "LightFade",
+            "HolidayRsiSwap",
+            "OptionsVisualizer"
         };
     }
 }

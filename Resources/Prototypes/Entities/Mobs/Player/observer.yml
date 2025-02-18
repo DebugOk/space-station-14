@@ -1,18 +1,23 @@
 - type: entity
-  id: MobObserver
-  name: observer
-  noSpawn: true
+  id: Incorporeal
   save: false
-  description: Boo!
+  abstract: true
+  description: Mobs without physical bodies
   components:
-  - type: ContentEye
-    maxZoom: 1.44,1.44
-  - type: MindContainer
-  - type: Clickable
-  - type: InteractionOutline
+  - type: Sprite
+    noRot: true
+    overrideContainerOcclusion: true # Always show up regardless of where they're contained.
+    drawdepth: Ghosts
+  - type: FTLSmashImmune
+  - type: CargoSellBlacklist
+  - type: MovementSpeedModifier
+    baseSprintSpeed: 12
+    baseWalkSpeed: 8
+  - type: MovementIgnoreGravity
   - type: Physics
     bodyType: KinematicController
-    fixedRotation: true
+    bodyStatus: InAir
+  - type: CanMoveInAir
   - type: Fixtures
     fixtures:
       fix1:
@@ -20,10 +25,28 @@
           !type:PhysShapeCircle
           radius: 0.35
         density: 15
-        mask:
+        layer:
         - GhostImpassable
-  - type: InputMover
-  - type: Appearance
+
+# shared parent between aghosts, replay spectators and normal observers
+- type: entity
+  parent:
+  - Incorporeal
+  - BaseMob
+  id: MobObserverBase
+  abstract: true
+  name: observer
+  description: Boo!
+  categories: [ HideSpawnMenu ]
+  components:
+  - type: Sprite
+    sprite: Mobs/Ghosts/ghost_human.rsi
+    color: "#fff8"
+    layers:
+    - state: animated
+      shader: unshaded
+  - type: ContentEye
+    maxZoom: 1.44,1.44
   - type: Eye
     drawFov: false
   - type: Input
@@ -31,35 +54,83 @@
   - type: Examiner
     skipChecks: true
   - type: Ghost
+  - type: GhostHearing
+  - type: ShowElectrocutionHUD
   - type: IntrinsicRadioReceiver
   - type: ActiveRadio
-    channels:
-    - Binary
-    - Common
-    - Command
-    - CentCom
-    - Engineering
-    - Medical
-    - Science
-    - Security
-    - Service
-    - Supply
-    - Syndicate
+    receiveAllChannels: true
     globalReceive: true
-  - type: Sprite
-    overrideContainerOcclusion: true # Ghosts always show up regardless of where they're contained.
-    noRot: true
-    drawdepth: Ghosts
-    sprite: Mobs/Ghosts/ghost_human.rsi
-    state: animated
-    color: "#fff8"
-    layers:
-      - state: animated
-        shader: unshaded
-  - type: MovementSpeedModifier
-    baseSprintSpeed: 12
-    baseWalkSpeed: 8
-  - type: MovementIgnoreGravity
   - type: Tag
     tags:
-      - BypassInteractionRangeChecks
+    - BypassInteractionRangeChecks
+  - type: PointLight
+    radius: 6
+    enabled: false
+
+# proto for player ghosts specifically
+- type: entity
+  parent: MobObserverBase
+  id: MobObserver
+  components:
+  - type: Spectral
+  - type: Tag
+    tags:
+    - AllowGhostShownByEvent
+
+- type: entity
+  id: ActionGhostBoo
+  name: Boo!
+  description: Scare your crew members because of boredom!
+  components:
+  - type: InstantAction
+    icon: Interface/Actions/scream.png
+    checkCanInteract: false
+    event: !type:BooActionEvent
+    startDelay: true
+    useDelay: 120
+
+- type: entity
+  id: ActionToggleLighting
+  name: Toggle Lighting
+  description: Toggle light rendering to better observe dark areas.
+  components:
+  - type: InstantAction
+    icon: Interface/VerbIcons/light.svg.192dpi.png
+    clientExclusive: true
+    checkCanInteract: false
+    event: !type:ToggleLightingActionEvent
+
+- type: entity
+  id: ActionToggleFov
+  name: Toggle FoV
+  description: Toggles field-of-view in order to see what players see.
+  components:
+  - type: InstantAction
+    icon: Interface/VerbIcons/vv.svg.192dpi.png
+    clientExclusive: true
+    checkCanInteract: false
+    event: !type:ToggleFoVActionEvent
+
+- type: entity
+  id: ActionToggleGhosts
+  name: Toggle Ghosts
+  description: Toggle the visibility of other ghosts.
+  components:
+  - type: InstantAction
+    icon: { sprite: Mobs/Ghosts/ghost_human.rsi, state: icon }
+    clientExclusive: true
+    checkCanInteract: false
+    event: !type:ToggleGhostsActionEvent
+
+- type: entity
+  id: ActionToggleGhostHearing
+  name: Toggle Ghost Hearing
+  description: Toggle between hearing all messages and hearing only radio & nearby messages.
+  components:
+  - type: InstantAction
+    checkCanInteract: false
+    icon:
+      sprite: Clothing/Ears/Headsets/base.rsi
+      state: icon
+    iconOn: Interface/Actions/ghostHearingToggled.png
+    event: !type:ToggleGhostHearingActionEvent

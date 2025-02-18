@@ -1,5 +1,5 @@
 - type: entity
-  id: BaseHumanOrgan
+  id: BaseHumanOrganUnGibbable
   parent: BaseItem
   abstract: true
   components:
@@ -15,10 +15,28 @@
         reagents:
         - ReagentId: Nutriment
           Quantity: 10
+      food:
+        maxVol: 5
+        reagents:
+        - ReagentId: UncookedAnimalProteins
+          Quantity: 5
+  - type: FlavorProfile
+    flavors:
+      - people
+  - type: Tag
+    tags:
+      - Meat
+
+- type: entity
+  id: BaseHumanOrgan
+  parent: BaseHumanOrganUnGibbable
+  abstract: true
+  components:
+  - type: Gibbable
 
 - type: entity
   id: OrganHumanBrain
-  parent: BaseHumanOrgan
+  parent: BaseHumanOrganUnGibbable
   name: brain
   description: "The source of incredible, unending intelligence. Honk."
   components:
@@ -28,8 +46,35 @@
   - type: Input
     context: "ghost"
   - type: Brain
+  - type: InputMover
+  - type: Examiner
   - type: BlockMovement
-
+  - type: BadFood
+  - type: Tag
+    tags:
+      - Meat
+  - type: SolutionContainerManager
+    solutions:
+      organ:
+        reagents:
+        - ReagentId: Nutriment
+          Quantity: 10
+      food:
+        maxVol: 5
+        reagents:
+        - ReagentId: GreyMatter
+          Quantity: 5
+  - type: FlavorProfile
+    flavors:
+      - people
+  - type: FoodSequenceElement
+    entries:
+      Burger: Brain
+      Taco: Brain
+  - type: Item
+    size: Small
+    heldPrefix: brain
+  
 - type: entity
   id: OrganHumanEyes
   parent: BaseHumanOrgan
@@ -40,6 +85,9 @@
     layers:
       - state: eyeball-l
       - state: eyeball-r
+  - type: Item
+    size: Small
+    heldPrefix: eyeballs
 
 - type: entity
   id: OrganHumanTongue
@@ -80,6 +128,9 @@
     layers:
       - state: lung-l
       - state: lung-r
+  - type: Item
+    size: Small
+    heldPrefix: lungs
   - type: Lung
   - type: Metabolizer
     removeEmpty: true
@@ -98,6 +149,11 @@
       Lung:
         maxVol: 100.0
         canReact: false
+      food:
+        maxVol: 5
+        reagents:
+        - ReagentId: UncookedAnimalProteins
+          Quantity: 5
 
 - type: entity
   id: OrganHumanHeart
@@ -117,6 +173,9 @@
     - id: Medicine
     - id: Poison
     - id: Narcotic
+  - type: Item
+    size: Small
+    heldPrefix: heart
 
 - type: entity
   id: OrganHumanStomach
@@ -126,10 +185,18 @@
   components:
   - type: Sprite
     state: stomach
+  - type: Item
+    size: Small
+    heldPrefix: stomach
   - type: SolutionContainerManager
     solutions:
       stomach:
         maxVol: 50
+      food:
+        maxVol: 5
+        reagents:
+        - ReagentId: UncookedAnimalProteins
+          Quantity: 5
   - type: Stomach
   # The stomach metabolizes stuff like foods and drinks.
   # TODO: Have it work off of the ent's solution container, and move this
@@ -150,6 +217,9 @@
   components:
   - type: Sprite
     state: liver
+  - type: Item
+    size: Small
+    heldPrefix: liver
   - type: Metabolizer # The liver metabolizes certain chemicals only, like alcohol.
     maxReagents: 1
     metabolizerTypes: [Human]
@@ -167,6 +237,9 @@
     layers:
       - state: kidney-l
       - state: kidney-r
+  - type: Item
+    size: Small
+    heldPrefix: kidneys
   # The kidneys just remove anything that doesn't currently have any metabolisms, as a stopgap.
   - type: Metabolizer
     maxReagents: 5

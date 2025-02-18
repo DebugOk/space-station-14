@@ -1,448 +1,236 @@
-using System.Linq;
-using Content.Server.Chat.Managers;
+using Content.Server.Administration.Logs;
+using Content.Server.Antag;
 using Content.Server.GameTicking.Rules.Components;
-using Content.Server.NPC.Systems;
 using Content.Server.Mind;
-using Content.Server.Objectives.Interfaces;
+using Content.Server.Objectives;
 using Content.Server.PDA.Ringer;
-using Content.Server.Players;
 using Content.Server.Roles;
-using Content.Server.Shuttles.Components;
 using Content.Server.Traitor.Uplink;
-using Content.Shared.CCVar;
-using Content.Shared.Dataset;
-using Content.Shared.Preferences;
-using Content.Shared.Mobs.Systems;
+using Content.Shared.Database;
+using Content.Shared.FixedPoint;
+using Content.Shared.GameTicking.Components;
+using Content.Shared.Mind;
+using Content.Shared.NPC.Systems;
 using Content.Shared.PDA;
 using Content.Shared.Roles;
-using Robust.Server.Player;
-using Robust.Shared.Configuration;
+using Content.Shared.Roles.Jobs;
+using Content.Shared.Roles.RoleCodeword;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Random;
-using Robust.Shared.Timing;
+using System.Linq;
+using System.Text;
 
 namespace Content.Server.GameTicking.Rules;
 
 public sealed class TraitorRuleSystem : GameRuleSystem<TraitorRuleComponent>
 {
+    private static readonly Color TraitorCodewordColor = Color.FromHex("#cc3b3b");
+
+    [Dependency] private readonly IAdminLogManager _adminLogger = default!;
+    [Dependency] private readonly AntagSelectionSystem _antag = default!;
+    [Dependency] private readonly SharedJobSystem _jobs = default!;
+    [Dependency] private readonly MindSystem _mindSystem = default!;
+    [Dependency] private readonly NpcFactionSystem _npcFaction = default!;
     [Dependency] private readonly IPrototypeManager _prototypeManager = default!;
     [Dependency] private readonly IRobustRandom _random = default!;
-    [Dependency] private readonly IConfigurationManager _cfg = default!;
-    [Dependency] private readonly IObjectivesManager _objectivesManager = default!;
-    [Dependency] private readonly IChatManager _chatManager = default!;
-    [Dependency] private readonly IGameTiming _gameTiming = default!;
-    [Dependency] private readonly NpcFactionSystem _npcFaction = default!;
-    [Dependency] private readonly MobStateSystem _mobStateSystem = default!;
+    [Dependency] private readonly SharedRoleCodewordSystem _roleCodewordSystem = default!;
+    [Dependency] private readonly SharedRoleSystem _roleSystem = default!;
     [Dependency] private readonly UplinkSystem _uplink = default!;
-    [Dependency] private readonly SharedAudioSystem _audioSystem = default!;
-    [Dependency] private readonly MindSystem _mindSystem = default!;
-
-    private ISawmill _sawmill = default!;
-
-    private int PlayersPerTraitor => _cfg.GetCVar(CCVars.TraitorPlayersPerTraitor);
-    private int MaxTraitors => _cfg.GetCVar(CCVars.TraitorMaxTraitors);
 
     public override void Initialize()
     {
         base.Initialize();
 
-        _sawmill = Logger.GetSawmill("preset");
+        Log.Level = LogLevel.Debug;
 
-        SubscribeLocalEvent<RoundStartAttemptEvent>(OnStartAttempt);
-        SubscribeLocalEvent<RulePlayerJobsAssignedEvent>(OnPlayersSpawned);
-        SubscribeLocalEvent<PlayerSpawnCompleteEvent>(HandleLatejoin);
-        SubscribeLocalEvent<RoundEndTextAppendEvent>(OnRoundEndText);
+        SubscribeLocalEvent<TraitorRuleComponent, AfterAntagEntitySelectedEvent>(AfterEntitySelected);
+        SubscribeLocalEvent<TraitorRuleComponent, ObjectivesTextPrependEvent>(OnObjectivesTextPrepend);
     }
 
-    protected override void ActiveTick(EntityUid uid, TraitorRuleComponent component, GameRuleComponent gameRule, float frameTime)
+    protected override void Added(EntityUid uid, TraitorRuleComponent component, GameRuleComponent gameRule, GameRuleAddedEvent args)
     {
-        base.ActiveTick(uid, component, gameRule, frameTime);
-
-        if (component.SelectionStatus == TraitorRuleComponent.SelectionState.ReadyToSelect && _gameTiming.CurTime > component.AnnounceAt)
-            DoTraitorStart(component);
+        base.Added(uid, component, gameRule, args);
+        SetCodewords(component, args.RuleEntity);
     }
 
-    private void OnStartAttempt(RoundStartAttemptEvent ev)
+    private void AfterEntitySelected(Entity<TraitorRuleComponent> ent, ref AfterAntagEntitySelectedEvent args)
     {
-        var query = EntityQueryEnumerator<TraitorRuleComponent, GameRuleComponent>();
-        while (query.MoveNext(out var uid, out var traitor, out var gameRule))
-        {
-            if (!GameTicker.IsGameRuleAdded(uid, gameRule))
-                continue;
-
-            MakeCodewords(traitor);
-
-            var minPlayers = _cfg.GetCVar(CCVars.TraitorMinPlayers);
-            if (!ev.Forced && ev.Players.Length < minPlayers)
-            {
-                _chatManager.SendAdminAnnouncement(Loc.GetString("traitor-not-enough-ready-players",
-                    ("readyPlayersCount", ev.Players.Length), ("minimumPlayers", minPlayers)));
-                ev.Cancel();
-                continue;
-            }
-
-            if (ev.Players.Length == 0)
-            {
-                _chatManager.DispatchServerAnnouncement(Loc.GetString("traitor-no-one-ready"));
-                ev.Cancel();
-            }
-        }
+        Log.Debug($"AfterAntagEntitySelected {ToPrettyString(ent)}");
+        MakeTraitor(args.EntityUid, ent);
     }
 
-    private void MakeCodewords(TraitorRuleComponent component)
+    private void SetCodewords(TraitorRuleComponent component, EntityUid ruleEntity)
     {
-        var codewordCount = _cfg.GetCVar(CCVars.TraitorCodewordCount);
-        var adjectives = _prototypeManager.Index<DatasetPrototype>("adjectives").Values;
-        var verbs = _prototypeManager.Index<DatasetPrototype>("verbs").Values;
+        component.Codewords = GenerateTraitorCodewords(component);
+        _adminLogger.Add(LogType.EventStarted, LogImpact.Low, $"Codewords generated for game rule {ToPrettyString(ruleEntity)}: {string.Join(", ", component.Codewords)}");
+    }
+
+    public string[] GenerateTraitorCodewords(TraitorRuleComponent component)
+    {
+        var adjectives = _prototypeManager.Index(component.CodewordAdjectives).Values;
+        var verbs = _prototypeManager.Index(component.CodewordVerbs).Values;
         var codewordPool = adjectives.Concat(verbs).ToList();
-        var finalCodewordCount = Math.Min(codewordCount, codewordPool.Count);
-        component.Codewords = new string[finalCodewordCount];
+        var finalCodewordCount = Math.Min(component.CodewordCount, codewordPool.Count);
+        string[] codewords = new string[finalCodewordCount];
         for (var i = 0; i < finalCodewordCount; i++)
         {
-            component.Codewords[i] = _random.PickAndTake(codewordPool);
+            codewords[i] = _random.PickAndTake(codewordPool);
         }
+        return codewords;
     }
 
-    private void DoTraitorStart(TraitorRuleComponent component)
+    public bool MakeTraitor(EntityUid traitor, TraitorRuleComponent component)
     {
-        if (!component.StartCandidates.Any())
+        Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - start");
+
+        //Grab the mind if it wasn't provided
+        if (!_mindSystem.TryGetMind(traitor, out var mindId, out var mind))
         {
-            _sawmill.Error("Tried to start Traitor mode without any candidates.");
-            return;
-        }
-
-        var numTraitors = MathHelper.Clamp(component.StartCandidates.Count / PlayersPerTraitor, 1, MaxTraitors);
-        var traitorPool = FindPotentialTraitors(component.StartCandidates, component);
-        var selectedTraitors = PickTraitors(numTraitors, traitorPool);
-
-        foreach (var traitor in selectedTraitors)
-        {
-            MakeTraitor(traitor);
-        }
-
-        component.SelectionStatus = TraitorRuleComponent.SelectionState.SelectionMade;
-    }
-
-    private void OnPlayersSpawned(RulePlayerJobsAssignedEvent ev)
-    {
-        var query = EntityQueryEnumerator<TraitorRuleComponent, GameRuleComponent>();
-        while (query.MoveNext(out var uid, out var traitor, out var gameRule))
-        {
-            if (!GameTicker.IsGameRuleAdded(uid, gameRule))
-                continue;
-            foreach (var player in ev.Players)
-            {
-                if (!ev.Profiles.ContainsKey(player.UserId))
-                    continue;
-
-                traitor.StartCandidates[player] = ev.Profiles[player.UserId];
-            }
-
-            var delay = TimeSpan.FromSeconds(
-                _cfg.GetCVar(CCVars.TraitorStartDelay) +
-                _random.NextFloat(0f, _cfg.GetCVar(CCVars.TraitorStartDelayVariance)));
-
-            traitor.AnnounceAt = _gameTiming.CurTime + delay;
-
-            traitor.SelectionStatus = TraitorRuleComponent.SelectionState.ReadyToSelect;
-        }
-    }
-
-    private List<IPlayerSession> FindPotentialTraitors(in Dictionary<IPlayerSession, HumanoidCharacterProfile> candidates, TraitorRuleComponent component)
-    {
-        var list = new List<IPlayerSession>();
-        var pendingQuery = GetEntityQuery<PendingClockInComponent>();
-
-        foreach (var player in candidates.Keys)
-        {
-            // Role prevents antag.
-            if (!(player.Data.ContentData()?.Mind?.AllRoles.All(role => role is not Job { CanBeAntag: false }) ?? false))
-            {
-                continue;
-            }
-
-            // Latejoin
-            if (player.AttachedEntity != null && pendingQuery.HasComponent(player.AttachedEntity.Value))
-                continue;
-
-            list.Add(player);
-        }
-
-        var prefList = new List<IPlayerSession>();
-
-        foreach (var player in list)
-        {
-            var profile = candidates[player];
-            if (profile.AntagPreferences.Contains(component.TraitorPrototypeId))
-            {
-                prefList.Add(player);
-            }
-        }
-        if (prefList.Count == 0)
-        {
-            _sawmill.Info("Insufficient preferred traitors, picking at random.");
-            prefList = list;
-        }
-        return prefList;
-    }
-
-    private List<IPlayerSession> PickTraitors(int traitorCount, List<IPlayerSession> prefList)
-    {
-        var results = new List<IPlayerSession>(traitorCount);
-        if (prefList.Count == 0)
-        {
-            _sawmill.Info("Insufficient ready players to fill up with traitors, stopping the selection.");
-            return results;
-        }
-
-        for (var i = 0; i < traitorCount; i++)
-        {
-            results.Add(_random.PickAndTake(prefList));
-            _sawmill.Info("Selected a preferred traitor.");
-        }
-        return results;
-    }
-
-    public bool MakeTraitor(IPlayerSession traitor)
-    {
-        var traitorRule = EntityQuery<TraitorRuleComponent>().FirstOrDefault();
-        if (traitorRule == null)
-        {
-            //todo fuck me this shit is awful
-            //no i wont fuck you, erp is against rules
-            GameTicker.StartGameRule("Traitor", out var ruleEntity);
-            traitorRule = Comp<TraitorRuleComponent>(ruleEntity);
-            MakeCodewords(traitorRule);
-        }
-
-        var mind = traitor.Data.ContentData()?.Mind;
-        if (mind == null)
-        {
-            _sawmill.Info("Failed getting mind for picked traitor.");
-            return false;
-        }
-        if (mind.OwnedEntity is not { } entity)
-        {
-            Logger.ErrorS("preset", "Mind picked for traitor did not have an attached entity.");
+            Log.Debug($"MakeTraitor {ToPrettyString(traitor)}  - failed, no Mind found");
             return false;
         }
 
-        // Calculate the amount of currency on the uplink.
-        var startingBalance = _cfg.GetCVar(CCVars.TraitorStartingBalance);
-        if (mind.CurrentJob != null)
-            startingBalance = Math.Max(startingBalance - mind.CurrentJob.Prototype.AntagAdvantage, 0);
+        var briefing = "";
 
-        // creadth: we need to create uplink for the antag.
-        // PDA should be in place already
-        var pda = _uplink.FindUplinkTarget(mind.OwnedEntity!.Value);
-        if (pda == null || !_uplink.AddUplink(mind.OwnedEntity.Value, startingBalance))
-            return false;
-
-        // Add the ringtone uplink and get its code for greeting
-        var code = EnsureComp<RingerUplinkComponent>(pda.Value).Code;
-
-        // Prepare antagonist role
-        var antagPrototype = _prototypeManager.Index<AntagPrototype>(traitorRule.TraitorPrototypeId);
-        var traitorRole = new TraitorRole(mind, antagPrototype);
-
-        // Give traitors their codewords and uplink code to keep in their character info menu
-        traitorRole.Mind.Briefing = string.Format(
-            "{0}\n{1}",
-            Loc.GetString("traitor-role-codewords-short", ("codewords", string.Join(", ", traitorRule.Codewords))),
-            Loc.GetString("traitor-role-uplink-code-short", ("code", string.Join("-", code).Replace("sharp","#"))));
-
-        // Assign traitor roles
-        _mindSystem.AddRole(mind, traitorRole);
-        SendTraitorBriefing(mind, traitorRule.Codewords, code);
-        traitorRule.Traitors.Add(traitorRole);
-
-        if (_mindSystem.TryGetSession(mind, out var session))
+        if (component.GiveCodewords)
         {
-            // Notificate player about new role assignment
-            _audioSystem.PlayGlobal(traitorRule.GreetSoundNotification, session);
+            Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - added codewords flufftext to briefing");
+            briefing = Loc.GetString("traitor-role-codewords-short", ("codewords", string.Join(", ", component.Codewords)));
         }
+
+        var issuer = _random.Pick(_prototypeManager.Index(component.ObjectiveIssuers).Values);
+
+        // Uplink code will go here if applicable, but we still need the variable if there aren't any
+        Note[]? code = null;
+
+        if (component.GiveUplink)
+        {
+            Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - Uplink start");
+            // Calculate the amount of currency on the uplink.
+            var startingBalance = component.StartingBalance;
+            if (_jobs.MindTryGetJob(mindId, out var prototype))
+            {
+                if (startingBalance < prototype.AntagAdvantage) // Can't use Math functions on FixedPoint2
+                    startingBalance = 0;
+                else
+                    startingBalance = startingBalance - prototype.AntagAdvantage;
+            }
+
+            // Choose and generate an Uplink, and return the uplink code if applicable
+            Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - Uplink request start");
+            var uplinkParams = RequestUplink(traitor, startingBalance, briefing);
+            code = uplinkParams.Item1;
+            briefing = uplinkParams.Item2;
+            Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - Uplink request completed");
+        }
+
+        string[]? codewords = null;
+        if (component.GiveCodewords)
+        {
+            Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - set codewords from component");
+            codewords = component.Codewords;
+        }
+
+        if (component.GiveBriefing)
+        {
+            _antag.SendBriefing(traitor, GenerateBriefing(codewords, code, issuer), null, component.GreetSoundNotification);
+            Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - Sent the Briefing");
+        }
+
+        Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - Adding TraitorMind");
+        component.TraitorMinds.Add(mindId);
+
+        // Assign briefing
+        //Since this provides neither an antag/job prototype, nor antag status/roletype,
+        //and is intrinsically related to the traitor role
+        //it does not need to be a separate Mind Role Entity
+        _roleSystem.MindHasRole<TraitorRoleComponent>(mindId, out var traitorRole);
+        if (traitorRole is not null)
+        {
+            Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - Add traitor briefing components");
+            AddComp<RoleBriefingComponent>(traitorRole.Value.Owner);
+            Comp<RoleBriefingComponent>(traitorRole.Value.Owner).Briefing = briefing;
+        }
+        else
+        {
+            Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - did not get traitor briefing");
+        }
+
+        // Send codewords to only the traitor client
+        var color = TraitorCodewordColor; // Fall back to a dark red Syndicate color if a prototype is not found
+
+        RoleCodewordComponent codewordComp = EnsureComp<RoleCodewordComponent>(mindId);
+        _roleCodewordSystem.SetRoleCodewords(codewordComp, "traitor", component.Codewords.ToList(), color);
 
         // Change the faction
-        _npcFaction.RemoveFaction(entity, "NanoTrasen", false);
-        _npcFaction.AddFaction(entity, "Syndicate");
+        Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - Change faction");
+        _npcFaction.RemoveFaction(traitor, component.NanoTrasenFaction, false);
+        _npcFaction.AddFaction(traitor, component.SyndicateFaction);
 
-        // Give traitors their objectives
-        var maxDifficulty = _cfg.GetCVar(CCVars.TraitorMaxDifficulty);
-        var maxPicks = _cfg.GetCVar(CCVars.TraitorMaxPicks);
-        var difficulty = 0f;
-        for (var pick = 0; pick < maxPicks && maxDifficulty > difficulty; pick++)
-        {
-            var objective = _objectivesManager.GetRandomObjective(traitorRole.Mind, "TraitorObjectiveGroups");
-
-            if (objective == null)
-                continue;
-            if (_mindSystem.TryAddObjective(traitorRole.Mind, objective))
-                difficulty += objective.Difficulty;
-        }
-
+        Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - Finished");
         return true;
     }
 
-    /// <summary>
-    ///     Send a codewords and uplink codes to traitor chat.
-    /// </summary>
-    /// <param name="mind">A mind (player)</param>
-    /// <param name="codewords">Codewords</param>
-    /// <param name="code">Uplink codes</param>
-    private void SendTraitorBriefing(Mind.Mind mind, string[] codewords, Note[] code)
+    private (Note[]?, string) RequestUplink(EntityUid traitor, FixedPoint2 startingBalance, string briefing)
     {
-        if (_mindSystem.TryGetSession(mind, out var session))
+        var pda = _uplink.FindUplinkTarget(traitor);
+        Note[]? code = null;
+
+        Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - Uplink add");
+        var uplinked = _uplink.AddUplink(traitor, startingBalance, pda, true);
+
+        if (pda is not null && uplinked)
         {
-           _chatManager.DispatchServerMessage(session, Loc.GetString("traitor-role-greeting"));
-           _chatManager.DispatchServerMessage(session, Loc.GetString("traitor-role-codewords", ("codewords", string.Join(", ", codewords))));
-           _chatManager.DispatchServerMessage(session, Loc.GetString("traitor-role-uplink-code", ("code", string.Join("-", code).Replace("sharp","#"))));
+            Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - Uplink is PDA");
+            // Codes are only generated if the uplink is a PDA
+            code = EnsureComp<RingerUplinkComponent>(pda.Value).Code;
+
+            // If giveUplink is false the uplink code part is omitted
+            briefing = string.Format("{0}\n{1}",
+                briefing,
+                Loc.GetString("traitor-role-uplink-code-short", ("code", string.Join("-", code).Replace("sharp", "#"))));
+            return (code, briefing);
         }
+        else if (pda is null && uplinked)
+        {
+            Log.Debug($"MakeTraitor {ToPrettyString(traitor)} - Uplink is implant");
+            briefing += "\n" + Loc.GetString("traitor-role-uplink-implant-short");
+        }
+
+        return (null, briefing);
     }
 
-    private void HandleLatejoin(PlayerSpawnCompleteEvent ev)
+    // TODO: AntagCodewordsComponent
+    private void OnObjectivesTextPrepend(EntityUid uid, TraitorRuleComponent comp, ref ObjectivesTextPrependEvent args)
     {
-        var query = EntityQueryEnumerator<TraitorRuleComponent, GameRuleComponent>();
-        while (query.MoveNext(out var uid, out var traitor, out var gameRule))
-        {
-            if (!GameTicker.IsGameRuleAdded(uid, gameRule))
-                continue;
-
-            if (traitor.TotalTraitors >= MaxTraitors)
-                continue;
-            if (!ev.LateJoin)
-                continue;
-            if (!ev.Profile.AntagPreferences.Contains(traitor.TraitorPrototypeId))
-                continue;
-
-            if (ev.JobId == null || !_prototypeManager.TryIndex<JobPrototype>(ev.JobId, out var job))
-                continue;
-
-            if (!job.CanBeAntag)
-                continue;
-
-            // Before the announcement is made, late-joiners are considered the same as players who readied.
-            if (traitor.SelectionStatus < TraitorRuleComponent.SelectionState.SelectionMade)
-            {
-                traitor.StartCandidates[ev.Player] = ev.Profile;
-                continue;
-            }
-
-            // the nth player we adjust our probabilities around
-            var target = PlayersPerTraitor * traitor.TotalTraitors + 1;
-
-            var chance = 1f / PlayersPerTraitor;
-
-            // If we have too many traitors, divide by how many players below target for next traitor we are.
-            if (ev.JoinOrder < target)
-            {
-                chance /= (target - ev.JoinOrder);
-            }
-            else // Tick up towards 100% chance.
-            {
-                chance *= ((ev.JoinOrder + 1) - target);
-            }
-
-            if (chance > 1)
-                chance = 1;
-
-            // Now that we've calculated our chance, roll and make them a traitor if we roll under.
-            // You get one shot.
-            if (_random.Prob(chance))
-            {
-                MakeTraitor(ev.Player);
-            }
-        }
+        if(comp.GiveCodewords)
+            args.Text += "\n" + Loc.GetString("traitor-round-end-codewords", ("codewords", string.Join(", ", comp.Codewords)));
     }
 
-    private void OnRoundEndText(RoundEndTextAppendEvent ev)
+    // TODO: figure out how to handle this? add priority to briefing event?
+    private string GenerateBriefing(string[]? codewords, Note[]? uplinkCode, string? objectiveIssuer = null)
     {
-        var query = EntityQueryEnumerator<TraitorRuleComponent, GameRuleComponent>();
-        while (query.MoveNext(out var uid, out var traitor, out var gameRule))
-        {
-            if (!GameTicker.IsGameRuleAdded(uid, gameRule))
-                continue;
+        var sb = new StringBuilder();
+        sb.AppendLine(Loc.GetString("traitor-role-greeting", ("corporation", objectiveIssuer ?? Loc.GetString("objective-issuer-unknown"))));
+        if (codewords != null)
+            sb.AppendLine(Loc.GetString("traitor-role-codewords", ("codewords", string.Join(", ", codewords))));
+        if (uplinkCode != null)
+            sb.AppendLine(Loc.GetString("traitor-role-uplink-code", ("code", string.Join("-", uplinkCode).Replace("sharp", "#"))));
+        else
+            sb.AppendLine(Loc.GetString("traitor-role-uplink-implant"));
 
-            var result = Loc.GetString("traitor-round-end-result", ("traitorCount", traitor.Traitors.Count));
 
-            result += "\n" + Loc.GetString("traitor-round-end-codewords", ("codewords", string.Join(", ", traitor.Codewords))) +
-                      "\n";
-
-            foreach (var t in traitor.Traitors)
-            {
-                var name = t.Mind.CharacterName;
-                _mindSystem.TryGetSession(t.Mind, out var session);
-                var username = session?.Name;
-
-                var objectives = t.Mind.AllObjectives.ToArray();
-                if (objectives.Length == 0)
-                {
-                    if (username != null)
-                    {
-                        if (name == null)
-                            result += "\n" + Loc.GetString("traitor-user-was-a-traitor", ("user", username));
-                        else
-                            result += "\n" + Loc.GetString("traitor-user-was-a-traitor-named", ("user", username),
-                                ("name", name));
-                    }
-                    else if (name != null)
-                        result += "\n" + Loc.GetString("traitor-was-a-traitor-named", ("name", name));
-
-                    continue;
-                }
-
-                if (username != null)
-                {
-                    if (name == null)
-                        result += "\n" + Loc.GetString("traitor-user-was-a-traitor-with-objectives",
-                            ("user", username));
-                    else
-                        result += "\n" + Loc.GetString("traitor-user-was-a-traitor-with-objectives-named",
-                            ("user", username), ("name", name));
-                }
-                else if (name != null)
-                    result += "\n" + Loc.GetString("traitor-was-a-traitor-with-objectives-named", ("name", name));
-
-                foreach (var objectiveGroup in objectives.GroupBy(o => o.Prototype.Issuer))
-                {
-                    result += "\n" + Loc.GetString($"preset-traitor-objective-issuer-{objectiveGroup.Key}");
-
-                    foreach (var objective in objectiveGroup)
-                    {
-                        foreach (var condition in objective.Conditions)
-                        {
-                            var progress = condition.Progress;
-                            if (progress > 0.99f)
-                            {
-                                result += "\n- " + Loc.GetString(
-                                    "traitor-objective-condition-success",
-                                    ("condition", condition.Title),
-                                    ("markupColor", "green")
-                                );
-                            }
-                            else
-                            {
-                                result += "\n- " + Loc.GetString(
-                                    "traitor-objective-condition-fail",
-                                    ("condition", condition.Title),
-                                    ("progress", (int) (progress * 100)),
-                                    ("markupColor", "red")
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            ev.AddLine(result);
-        }
+        return sb.ToString();
     }
 
-    public List<TraitorRole> GetOtherTraitorsAliveAndConnected(Mind.Mind ourMind)
+    public List<(EntityUid Id, MindComponent Mind)> GetOtherTraitorMindsAliveAndConnected(MindComponent ourMind)
     {
-        List<TraitorRole> allTraitors = new();
-        foreach (var traitor in EntityQuery<TraitorRuleComponent>())
+        List<(EntityUid Id, MindComponent Mind)> allTraitors = new();
+
+        var query = EntityQueryEnumerator<TraitorRuleComponent>();
+        while (query.MoveNext(out var uid, out var traitor))
         {
-            foreach (var role in GetOtherTraitorsAliveAndConnected(ourMind, traitor))
+            foreach (var role in GetOtherTraitorMindsAliveAndConnected(ourMind, (uid, traitor)))
             {
                 if (!allTraitors.Contains(role))
                     allTraitors.Add(role);
@@ -452,13 +240,17 @@ public sealed class TraitorRuleSystem : GameRuleSystem<TraitorRuleComponent>
         return allTraitors;
     }
 
-    private List<TraitorRole> GetOtherTraitorsAliveAndConnected(Mind.Mind ourMind, TraitorRuleComponent component)
+    private List<(EntityUid Id, MindComponent Mind)> GetOtherTraitorMindsAliveAndConnected(MindComponent ourMind, Entity<TraitorRuleComponent> rule)
     {
-        return component.Traitors // don't want
-            .Where(t => t.Mind.OwnedEntity is not null) // no entity
-            .Where(t => t.Mind.Session is not null) // player disconnected
-            .Where(t => t.Mind != ourMind) // ourselves
-            .Where(t => _mobStateSystem.IsAlive((EntityUid) t.Mind.OwnedEntity!)) // dead
-            .Where(t => t.Mind.CurrentEntity == t.Mind.OwnedEntity).ToList(); // not in original body
+        var traitors = new List<(EntityUid Id, MindComponent Mind)>();
+        foreach (var mind in _antag.GetAntagMinds(rule.Owner))
+        {
+            if (mind.Comp == ourMind)
+                continue;
+
+            traitors.Add((mind, mind));
+        }
+
+        return traitors;
     }
 }

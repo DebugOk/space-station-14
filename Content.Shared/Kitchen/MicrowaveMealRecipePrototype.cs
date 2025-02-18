@@ -10,7 +10,7 @@ namespace Content.Shared.Kitchen
     ///    A recipe for space microwaves.
     /// </summary>
     [Prototype("microwaveMealRecipe")]
-    public sealed class FoodRecipePrototype : IPrototype
+    public sealed partial class FoodRecipePrototype : IPrototype
     {
         [ViewVariables]
         [IdDataField]
@@ -33,8 +33,15 @@ namespace Content.Shared.Kitchen
 
         public string Name => Loc.GetString(_name);
 
+        // TODO Turn this into a ReagentQuantity[]
         public IReadOnlyDictionary<string, FixedPoint2> IngredientsReagents => _ingsReagents;
         public IReadOnlyDictionary<string, FixedPoint2> IngredientsSolids => _ingsSolids;
+
+        /// <summary>
+        /// Is this recipe unavailable in normal circumstances?
+        /// </summary>
+        [DataField]
+        public bool SecretRecipe = false;
 
         /// <summary>
         ///    Count the number of ingredients in a recipe for sorting the recipe list.

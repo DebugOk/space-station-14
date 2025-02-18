@@ -1,6 +1,4 @@
-﻿using System.Linq;
-using Content.Server.GameTicking;
-using Content.Server.Shuttles.Components;
+﻿using Content.Server.GameTicking;
 using Content.Server.Spawners.Components;
 using Content.Server.Station.Systems;
 using Robust.Shared.Map;
@@ -17,10 +15,10 @@ public sealed class SpawnPointSystem : EntitySystem
 
     public override void Initialize()
     {
-        SubscribeLocalEvent<PlayerSpawningEvent>(OnSpawnPlayer);
+        SubscribeLocalEvent<PlayerSpawningEvent>(OnPlayerSpawning);
     }
 
-    private void OnSpawnPlayer(PlayerSpawningEvent args)
+    private void OnPlayerSpawning(PlayerSpawningEvent args)
     {
         if (args.SpawnResult != null)
             return;
@@ -39,7 +37,9 @@ public sealed class SpawnPointSystem : EntitySystem
                 possiblePositions.Add(xform.Coordinates);
             }
 
-            if (_gameTicker.RunLevel != GameRunLevel.InRound && spawnPoint.SpawnType == SpawnPointType.Job && (args.Job == null || spawnPoint.Job?.ID == args.Job.Prototype.ID))
+            if (_gameTicker.RunLevel != GameRunLevel.InRound &&
+                spawnPoint.SpawnType == SpawnPointType.Job &&
+                (args.Job == null || spawnPoint.Job == args.Job))
             {
                 possiblePositions.Add(xform.Coordinates);
             }
@@ -51,7 +51,7 @@ public sealed class SpawnPointSystem : EntitySystem
             // TODO: Refactor gameticker spawning code so we don't have to do this!
             var points2 = EntityQueryEnumerator<SpawnPointComponent, TransformComponent>();
 
-            if (points2.MoveNext(out var uid, out var spawnPoint, out var xform))
+            if (points2.MoveNext(out var spawnPoint, out var xform))
             {
                 possiblePositions.Add(xform.Coordinates);
             }

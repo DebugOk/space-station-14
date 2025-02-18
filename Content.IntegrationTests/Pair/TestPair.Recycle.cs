@@ -1,10 +1,13 @@
-﻿#nullable enable
+#nullable enable
 using System.IO;
 using System.Linq;
 using Content.Server.GameTicking;
-using Content.Server.Mind.Components;
+using Content.Server.Preferences.Managers;
 using Content.Shared.CCVar;
 using Content.Shared.GameTicking;
+using Content.Shared.Mind;
+using Content.Shared.Mind.Components;
+using Content.Shared.Preferences;
 using Robust.Client;
 using Robust.Server.Player;
 using Robust.Shared.Exceptions;
@@ -33,12 +36,19 @@ public sealed partial class TestPair : IAsyncDisposable
 
     private async Task OnCleanDispose()
     {
+        await Server.WaitIdleAsync();
+        await Client.WaitIdleAsync();
+        await ResetModifiedPreferences();
+        await Server.RemoveAllDummySessions();
+
         if (TestMap != null)
         {
             await Server.WaitPost(() => Server.EntMan.DeleteEntity(TestMap.MapUid));
             TestMap = null;
         }
-   
+
+        await RevertModifiedCvars();
+
         var usageTime = Watch.Elapsed;
         Watch.Restart();
         await _testOut.WriteLineAsync($"{nameof(CleanReturnAsync)}: Test borrowed pair {Id} for {usageTime.TotalMilliseconds} ms");
@@ -76,11 +86,21 @@ public sealed partial class TestPair : IAsyncDisposable
         await _testOut.WriteLineAsync($"{nameof(CleanReturnAsync)}: PoolManager took {returnTime.TotalMilliseconds} ms to put pair {Id} back into the pool");
     }
 
+    private async Task ResetModifiedPreferences()
+    {
+        var prefMan = Server.ResolveDependency<IServerPreferencesManager>();
+        foreach (var user in _modifiedProfiles)
+        {
+            await Server.WaitPost(() => prefMan.SetProfile(user, 0, new HumanoidCharacterProfile()).Wait());
+        }
+        _modifiedProfiles.Clear();
+    }
+
     public async ValueTask CleanReturnAsync()
     {
         if (State != PairState.InUse)
             throw new Exception($"{nameof(CleanReturnAsync)}: Unexpected state. Pair: {Id}. State: {State}.");
-        
+
         await _testOut.WriteLineAsync($"{nameof(CleanReturnAsync)}: Return of pair {Id} started");
         State = PairState.CleanDisposed;
         await OnCleanDispose();
@@ -106,7 +126,7 @@ public sealed partial class TestPair : IAsyncDisposable
                 throw new Exception($"{nameof(DisposeAsync)}: Unexpected state. Pair: {Id}. State: {State}.");
         }
     }
-    
+
     public async Task CleanPooledPair(PoolSettings settings, TextWriter testOut)
     {
         Settings = default!;
@@ -130,7 +150,8 @@ public sealed partial class TestPair : IAsyncDisposable
         // Move to pre-round lobby. Required to toggle dummy ticker on and off
         if (gameTicker.RunLevel != GameRunLevel.PreRoundLobby)
         {
-            await testOut.WriteLineAsync($"Recycling: {Watch.Elapsed.TotalMilliseconds} ms: Restarting server.");
+            await testOut.WriteLineAsync($"Recycling: {Watch.Elapsed.TotalMilliseconds} ms: Restarting round.");
+            Server.CfgMan.SetCVar(CCVars.GameDummyTicker, false);
             Assert.That(gameTicker.DummyTicker, Is.False);
             Server.CfgMan.SetCVar(CCVars.GameLobbyEnabled, true);
             await Server.WaitPost(() => gameTicker.RestartRound());
@@ -145,6 +166,7 @@ public sealed partial class TestPair : IAsyncDisposable
 
         // Restart server.
         await testOut.WriteLineAsync($"Recycling: {Watch.Elapsed.TotalMilliseconds} ms: Restarting server again");
+        await Server.WaitPost(() => Server.EntMan.FlushEntities());
         await Server.WaitPost(() => gameTicker.RestartRound());
         await RunTicksSync(1);
 
@@ -160,7 +182,7 @@ public sealed partial class TestPair : IAsyncDisposable
         await ReallyBeIdle();
         await testOut.WriteLineAsync($"Recycling: {Watch.Elapsed.TotalMilliseconds} ms: Done recycling");
     }
-    
+
     public void ValidateSettings(PoolSettings settings)
     {
         var cfg = Server.CfgMan;
@@ -188,7 +210,7 @@ public sealed partial class TestPair : IAsyncDisposable
         var sPlayer = Server.ResolveDependency<IPlayerManager>();
         Assert.That(sPlayer.Sessions.Count(), Is.EqualTo(1));
         var session = sPlayer.Sessions.Single();
-        Assert.That(cPlayer.LocalPlayer?.Session.UserId, Is.EqualTo(session.UserId));
+        Assert.That(cPlayer.LocalSession?.UserId, Is.EqualTo(session.UserId));
 
         if (ticker.DummyTicker)
             return;
@@ -202,17 +224,18 @@ public sealed partial class TestPair : IAsyncDisposable
 
         if (settings.InLobby)
         {
-            Assert.Null(session.AttachedEntity);
+            Assert.That(session.AttachedEntity, Is.Null);
             return;
         }
 
-        Assert.NotNull(session.AttachedEntity);
+        Assert.That(session.AttachedEntity, Is.Not.Null);
         Assert.That(entMan.EntityExists(session.AttachedEntity));
         Assert.That(entMan.HasComponent<MindContainerComponent>(session.AttachedEntity));
         var mindCont = entMan.GetComponent<MindContainerComponent>(session.AttachedEntity!.Value);
-        Assert.NotNull(mindCont.Mind);
-        Assert.Null(mindCont.Mind?.VisitingEntity);
-        Assert.That(mindCont.Mind!.OwnedEntity, Is.EqualTo(session.AttachedEntity!.Value));
-        Assert.That(mindCont.Mind.UserId, Is.EqualTo(session.UserId));
+        Assert.That(mindCont.Mind, Is.Not.Null);
+        Assert.That(entMan.TryGetComponent(mindCont.Mind, out MindComponent? mind));
+        Assert.That(mind!.VisitingEntity, Is.Null);
+        Assert.That(mind.OwnedEntity, Is.EqualTo(session.AttachedEntity!.Value));
+        Assert.That(mind.UserId, Is.EqualTo(session.UserId));
     }
 }

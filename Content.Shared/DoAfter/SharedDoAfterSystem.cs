@@ -3,7 +3,6 @@ using System.Threading.Tasks;
 using Content.Shared.ActionBlocker;
 using Content.Shared.Damage;
 using Content.Shared.Hands.Components;
-using Content.Shared.Mobs;
 using Content.Shared.Tag;
 using Robust.Shared.GameStates;
 using Robust.Shared.Serialization;
@@ -29,7 +28,6 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
         base.Initialize();
         SubscribeLocalEvent<DoAfterComponent, DamageChangedEvent>(OnDamage);
         SubscribeLocalEvent<DoAfterComponent, EntityUnpausedEvent>(OnUnpaused);
-        SubscribeLocalEvent<DoAfterComponent, MobStateChangedEvent>(OnStateChanged);
         SubscribeLocalEvent<DoAfterComponent, ComponentGetState>(OnDoAfterGetState);
         SubscribeLocalEvent<DoAfterComponent, ComponentHandleState>(OnDoAfterHandleState);
     }
@@ -43,19 +41,7 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
                 doAfter.CancelledTime = doAfter.CancelledTime.Value + args.PausedTime;
         }
 
-        Dirty(component);
-    }
-
-    private void OnStateChanged(EntityUid uid, DoAfterComponent component, MobStateChangedEvent args)
-    {
-        if (args.NewMobState != MobState.Dead || args.NewMobState != MobState.Critical)
-            return;
-
-        foreach (var doAfter in component.DoAfters.Values)
-        {
-            InternalCancel(doAfter, component);
-        }
-        Dirty(component);
+        Dirty(uid, component);
     }
 
     /// <summary>
@@ -63,10 +49,12 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
     /// </summary>
     private void OnDamage(EntityUid uid, DoAfterComponent component, DamageChangedEvent args)
     {
-        if (!args.InterruptsDoAfters || !args.DamageIncreased || args.DamageDelta == null)
+        // If we're applying state then let the server state handle the do_after prediction.
+        // This is to avoid scenarios where a do_after is erroneously cancelled on the final tick.
+        if (!args.InterruptsDoAfters || !args.DamageIncreased || args.DamageDelta == null || GameTiming.ApplyingState)
             return;
 
-        var delta = args.DamageDelta?.Total;
+        var delta = args.DamageDelta.GetTotal();
 
         var dirty = false;
         foreach (var doAfter in component.DoAfters.Values)
@@ -79,7 +67,7 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
         }
 
         if (dirty)
-            Dirty(component);
+            Dirty(uid, component);
     }
 
     private void RaiseDoAfterEvents(DoAfter doAfter, DoAfterComponent component)
@@ -100,7 +88,7 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
 
     private void OnDoAfterGetState(EntityUid uid, DoAfterComponent comp, ref ComponentGetState args)
     {
-        args.State = new DoAfterComponentState(comp);
+        args.State = new DoAfterComponentState(EntityManager, comp);
     }
 
     private void OnDoAfterHandleState(EntityUid uid, DoAfterComponent comp, ref ComponentHandleState args)
@@ -115,7 +103,18 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
         comp.DoAfters.Clear();
         foreach (var (id, doAfter) in state.DoAfters)
         {
-            comp.DoAfters.Add(id, new(doAfter));
+            var newDoAfter = new DoAfter(EntityManager, doAfter);
+            comp.DoAfters.Add(id, newDoAfter);
+
+            // Networking yay (if you have an easier way dear god please).
+            newDoAfter.UserPosition = EnsureCoordinates<DoAfterComponent>(newDoAfter.NetUserPosition, uid);
+            newDoAfter.InitialItem = EnsureEntity<DoAfterComponent>(newDoAfter.NetInitialItem, uid);
+
+            var doAfterArgs = newDoAfter.Args;
+            doAfterArgs.Target = EnsureEntity<DoAfterComponent>(doAfterArgs.NetTarget, uid);
+            doAfterArgs.Used = EnsureEntity<DoAfterComponent>(doAfterArgs.NetUsed, uid);
+            doAfterArgs.User = EnsureEntity<DoAfterComponent>(doAfterArgs.NetUser, uid);
+            doAfterArgs.EventTarget = EnsureEntity<DoAfterComponent>(doAfterArgs.NetEventTarget, uid);
         }
 
         comp.NextId = state.NextId;
@@ -144,7 +143,7 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
 
         if (doAfter.Delay <= TimeSpan.Zero)
         {
-            Logger.Warning("Awaited instant DoAfters are not supported fully supported");
+            Log.Warning("Awaited instant DoAfters are not supported fully supported");
             return DoAfterStatus.Finished;
         }
 
@@ -195,19 +194,26 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
         id = new DoAfterId(args.User, comp.NextId++);
         var doAfter = new DoAfter(id.Value.Index, args, GameTiming.CurTime);
 
-        if (args.BreakOnUserMove || args.BreakOnTargetMove)
+        // Networking yay
+        args.NetTarget = GetNetEntity(args.Target);
+        args.NetUsed = GetNetEntity(args.Used);
+        args.NetUser = GetNetEntity(args.User);
+        args.NetEventTarget = GetNetEntity(args.EventTarget);
+
+        if (args.BreakOnMove)
             doAfter.UserPosition = Transform(args.User).Coordinates;
 
-        if (args.Target != null && args.BreakOnTargetMove)
+        if (args.Target != null && args.BreakOnMove)
         {
-            // Target should never be null if the bool is set.
             var targetPosition = Transform(args.Target.Value).Coordinates;
             doAfter.UserPosition.TryDistance(EntityManager, targetPosition, out doAfter.TargetDistance);
         }
 
+        doAfter.NetUserPosition = GetNetCoordinates(doAfter.UserPosition);
+
         // For this we need to stay on the same hand slot and need the same item in that hand slot
         // (or if there is no item there we need to keep it free).
-        if (args.NeedHand && args.BreakOnHandChange)
+        if (args.NeedHand && (args.BreakOnHandChange || args.BreakOnDropItem))
         {
             if (!TryComp(args.User, out HandsComponent? handsComponent))
                 return false;
@@ -216,15 +222,18 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
             doAfter.InitialItem = handsComponent.ActiveHandEntity;
         }
 
-        // Inital checks
+        doAfter.NetInitialItem = GetNetEntity(doAfter.InitialItem);
+
+        // Initial checks
         if (ShouldCancel(doAfter, GetEntityQuery<TransformComponent>(), GetEntityQuery<HandsComponent>()))
             return false;
 
         if (args.AttemptFrequency == AttemptFrequency.StartAndEnd && !TryAttemptEvent(doAfter))
             return false;
 
-        if (args.Delay <= TimeSpan.Zero ||
-            _tag.HasTag(args.User, "InstantDoAfters"))
+        // TODO DO AFTER
+        // Why does this tag exist? Just make this a bool on the component?
+        if (args.Delay <= TimeSpan.Zero || _tag.HasTag(args.User, "InstantDoAfters"))
         {
             RaiseDoAfterEvents(doAfter, comp);
             // We don't store instant do-afters. This is just a lazy way of hiding them from client-side visuals.
@@ -233,7 +242,7 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
 
         comp.DoAfters.Add(doAfter.Index, doAfter);
         EnsureComp<ActiveDoAfterComponent>(args.User);
-        Dirty(comp);
+        Dirty(args.User, comp);
         args.Event.DoAfter = doAfter;
         return true;
     }
@@ -287,7 +296,7 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
         }
 
         if ((conditions & DuplicateConditions.SameEvent) != 0
-            && args.Event.GetType() != otherArgs.Event.GetType())
+            && !args.Event.IsDuplicate(otherArgs.Event))
         {
             return false;
         }
@@ -322,7 +331,7 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
         }
 
         InternalCancel(doAfter, comp);
-        Dirty(comp);
+        Dirty(entity, comp);
     }
 
     private void InternalCancel(DoAfter doAfter, DoAfterComponent component)
@@ -369,6 +378,19 @@ public abstract partial class SharedDoAfterSystem : EntitySystem
         // This would also mean the post-DoAfter checks haven't run yet. But whatever, I can't be bothered tracking and
         // networking whether a do-after has raised its events or not.
         return DoAfterStatus.Finished;
+    }
+
+    public bool IsRunning(DoAfterId? id, DoAfterComponent? comp = null)
+    {
+        if (id == null)
+            return false;
+
+        return GetStatus(id.Value.Uid, id.Value.Index, comp) == DoAfterStatus.Running;
+    }
+
+    public bool IsRunning(EntityUid entity, ushort id, DoAfterComponent? comp = null)
+    {
+        return GetStatus(entity, id, comp) == DoAfterStatus.Running;
     }
     #endregion
 }
